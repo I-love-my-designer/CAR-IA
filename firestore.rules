@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Global safety net: default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable global helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+    
+    function incoming() {
+      return request.resource.data;
+    }
+    
+    // Validation for Export Jobs
+    function isValidExportJob(data, isCreate) {
+      return ('status' in data && data.status is string && (data.status == 'pending' || data.status == 'waiting_inputs' || data.status == 'ready_to_generate' || data.status == 'completed' || data.status == 'failed'))
+        && ('imageA' in data && data.imageA is string)
+        && ('imageB' in data && data.imageB is string)
+        && ('imageC' in data && data.imageC is string)
+        && ('createdAt' in data && data.createdAt != null)
+        && ('presetsFond' in data && data.presetsFond is map)
+        && ('metadataUtilisateur' in data && data.metadataUtilisateur is map)
+        // Optional logo URL
+        && (!('logo' in data) || data.logo == null || data.logo is string)
+        && (isCreate || !('imageFinal' in data) || data.imageFinal is string)
+        && (isCreate || !('errorMessage5' in data) || data.errorMessage5 is string)
+        && data.keys().size() <= 80;
+    }
+
+    // Validation for Entry (Fields A-N + system fields + coordinates)
+    function isValidEntry(data) {
+      let requiredFields = [
+        'imageId', 'logo', 'imageSize', 'imagePosition', 'imageColorFill', 'imageExtra',
+        'logoX', 'logoY',
+        'textEnabled', 'textFont', 'textSize', 'textAlign', 'textPosition', 'textColorFill', 'perspective', 'textExtra',
+        'textX', 'textY',
+        'createdAt'
+      ];
+      return data.keys().hasAll(requiredFields)
+        && ((request.auth == null && data.keys().size() == 19) || (request.auth != null && 'userId' in data && data.userId == request.auth.uid && data.keys().size() == 20))
+        && data.imageId is string && data.imageId.size() <= 100
+        && data.logo is bool
+        && data.imageSize is string && data.imageSize.size() <= 100
+        && data.imagePosition is string && data.imagePosition.size() <= 100
+        && data.imageColorFill is string && data.imageColorFill.size() <= 100
+        && data.imageExtra is string && data.imageExtra.size() <= 500
+        && data.logoX is string && data.logoX.size() <= 100
+        && data.logoY is string && data.logoY.size() <= 100
+        && data.textEnabled is bool
+        && data.textFont is string && data.textFont.size() <= 100
+        && data.textSize is string && data.textSize.size() <= 100
+        && data.textAlign is string && data.textAlign.size() <= 100
+        && data.textPosition is string && data.textPosition.size() <= 100
+        && data.textColorFill is string && data.textColorFill.size() <= 100
+        && data.perspective is string && data.perspective.size() <= 100
+        && data.textExtra is string && data.textExtra.size() <= 500
+        && data.textX is string && data.textX.size() <= 100
+        && data.textY is string && data.textY.size() <= 100
+        && data.createdAt == request.time;
+    }
+
+    // Exports collection rules (PWA-compositing jobs) Permissive for the PWA and background API/Engine
+    match /exports/{jobId} {
+      allow read, write: if true;
+    }
+
+    // Entries collection rules (branding preset configurations)
+    match /entries/{entryId} {
+      // Allow read to everyone (needed for the preset subscription / indexation)
+      allow get, list: if true;
+
+      // Allow write if matching strict validation
+      allow create, update: if isValidId(entryId) && isValidEntry(incoming());
+      
+      // Allow delete if owner (when signed in) or if admin/public if necessary
+      allow delete: if !isSignedIn() || (resource != null && resource.data.userId == request.auth.uid);
+    }
+
+    match /Entries/{entryId} {
+      // Allow read to everyone (needed for the case-sensitive fallback preset subscription)
+      allow get, list: if true;
+
+      // Allow write if matching strict validation
+      allow create, update: if isValidId(entryId) && isValidEntry(incoming());
+      
+      // Allow delete if owner (when signed in) or if admin/public if necessary
+      allow delete: if !isSignedIn() || (resource != null && resource.data.userId == request.auth.uid);
+    }
+  }
+}

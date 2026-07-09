@@ -1,0 +1,99 @@
+{
+  "entities": {
+    "Entry": {
+      "title": "Branding Preset Entry",
+      "description": "Represents branding logo and text positioning presets for background imagery.",
+      "type": "object",
+      "properties": {
+        "logo": {
+          "type": "boolean",
+          "description": "Whether logo is enabled by default"
+        },
+        "imagePosition": {
+          "type": "string",
+          "description": "Position coordinates (e.g. '512-100')"
+        },
+        "imageSize": {
+          "type": "string",
+          "description": "Width size of the logo (e.g. '150')"
+        },
+        "imageColorFill": {
+          "type": "string",
+          "description": "Optional background/fill color hex for the logo"
+        },
+        "textEnabled": {
+          "type": "boolean",
+          "description": "Whether custom text is enabled by default"
+        },
+        "textFont": {
+          "type": "string",
+          "description": "Font family of the dynamic branding text"
+        },
+        "textColorFill": {
+          "type": "string",
+          "description": "Hex color of the dynamic branding text"
+        },
+        "textSize": {
+          "type": "string",
+          "description": "Font size in pixels of the branding text"
+        },
+        "textPosition": {
+          "type": "string",
+          "description": "Position coordinates of the dynamic branding text (e.g. '512-400')"
+        }
+      }
+    },
+    "ExportJob": {
+      "title": "Export Job",
+      "description": "Represents an image export and optimization job synced with Car AI Nodes.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "completed", "failed"],
+          "description": "The processing status of the job"
+        },
+        "imageA": {
+          "type": "string",
+          "description": "Base64 JPEG representation of the environment background (compressed)"
+        },
+        "imageB": {
+          "type": "string",
+          "description": "Base64 PNG or SVG representation of the vehicle cutout"
+        },
+        "imageC": {
+          "type": "string",
+          "description": "Base64 JPEG representation of the HTML5 canvas preview/composition"
+        },
+        "rotation": {
+          "type": "number",
+          "description": "Vehicle rotation angle (precise float degrees)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server timestamp of job creation"
+        },
+        "imageFinal": {
+          "type": "string",
+          "description": "High-quality final image URL or Base64 returned by Car AI Nodes"
+        },
+        "errorMessage5": {
+          "type": "string",
+          "description": "Error message injected by Car AI Nodes in case of failure"
+        }
+      },
+      "required": ["status", "imageA", "imageB", "imageC", "rotation", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/entries/{entryId}": {
+      "schema": "Entry",
+      "description": "Collection of preset documents matching ambient backgrounds with placement constraints"
+    },
+    "/exports/{jobId}": {
+      "schema": "ExportJob",
+      "description": "Collection of photobooth exported jobs synced with the AI nodes using the exact exports contract"
+    }
+  }
+}

@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reuseable global helpers
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Schema validation for Compositing Job
+    function isValidCompositingJob(data, isCreate) {
+      return data.keys().hasAll(['status', 'vehicleImage', 'backgroundId', 'roughComposite', 'createdAt'])
+        && data.keys().size() <= 6
+        && data.status is string
+        && (data.status == 'pending' || data.status == 'processing' || data.status == 'completed' || data.status == 'error')
+        && data.backgroundId is string
+        && data.backgroundId.size() > 0
+        && data.backgroundId.size() <= 128
+        && data.vehicleImage is string
+        && data.vehicleImage.size() >= 100
+        && data.vehicleImage.size() <= 1048576
+        && data.roughComposite is string
+        && data.roughComposite.size() >= 100
+        && data.roughComposite.size() <= 1048576
+        && (!isCreate || data.createdAt == request.time)
+        && (!data.keys().hasAny(['finalResult']) || (data.finalResult is string && data.finalResult.size() <= 1048576));
+    }
+
+    // Rules for compositing_jobs
+    match /compositing_jobs/{jobId} {
+      // Validate the dynamic ID path variable to prevent ID poisoning
+      allow get: if isValidId(jobId);
+      
+      // Do not allow arbitrary listing/queries of jobs to protect privacy (Query Enforcer)
+      allow list: if false;
+
+      // Anyone block-creates a pending job with precise validations (PWA Client)
+      allow create: if isValidId(jobId) 
+        && isValidCompositingJob(incoming(), true) 
+        && incoming().status == 'pending';
+
+      // Updates are restricted (Studio backend updates status and finalResult)
+      allow update: if isValidId(jobId)
+        && isValidCompositingJob(incoming(), false)
+        && (
+          // Invariant: createdAt is immortal
+          incoming().createdAt == existing().createdAt
+          && incoming().vehicleImage == existing().vehicleImage
+          && incoming().backgroundId == existing().backgroundId
+          && incoming().roughComposite == existing().roughComposite
+          && (
+            // Transition branch 1: NodeGen Studio takes processing or completes/errors the job
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'finalResult'])
+          )
+        );
+
+      allow delete: if false;
+    }
+  }
+}

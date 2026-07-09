@@ -1,0 +1,64 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // 1. Accès public en lecture pour les assets de base de l'application
+    match /ENVIRONMENTS/{allPaths=**} {
+      allow read, list: if true;
+    }
+    match /LOGOS/{allPaths=**} {
+      allow read, list: if true;
+    }
+    match /logos/{allPaths=**} {
+      allow read, list: if true;
+    }
+    match /MARQUES/{allPaths=**} {
+      allow read, list: if true;
+    }
+    match /marques/{allPaths=**} {
+      allow read, list: if true;
+    }
+    
+    // Fallbacks alphabétiques pour la résilience
+    match /A/{allPaths=**} { allow read, list: if true; }
+    match /B/{allPaths=**} { allow read, list: if true; }
+    match /C/{allPaths=**} { allow read, list: if true; }
+    match /D/{allPaths=**} { allow read, list: if true; }
+    match /E/{allPaths=**} { allow read, list: if true; }
+    match /a/{allPaths=**} { allow read, list: if true; }
+    match /b/{allPaths=**} { allow read, list: if true; }
+    match /c/{allPaths=**} { allow read, list: if true; }
+    match /d/{allPaths=**} { allow read, list: if true; }
+    match /e/{allPaths=**} { allow read, list: if true; }
+    
+    // 2. Règles spécifiques pour les exports de véhicules détourés (Image B)
+    match /exports/vehicles/{allPaths=**} {
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+    
+    // 3. Règles spécifiques pour les maquettes de référence (Image C)
+    match /exports/references/{allPaths=**} {
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+    
+    // 4. Règles spécifiques pour les logos personnalisés de l'utilisateur
+    match /exports/logos/{allPaths=**} {
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+    
+    // Règles pour les dossiers cloisonnés par utilisateur (Conforme Blueprint)
+    match /users/{userId}/{allPaths=**} {
+      allow read, create: if true;
+      allow update, delete: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // 5. Règle de sécurité par défaut : bloque tout autre accès non spécifié
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
