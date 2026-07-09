@@ -1,11 +1,10 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
   
   // Determine the root directory of the project dynamically to be resilient to different runtime contexts (like Cloud Run)
   const currentDir = typeof __dirname !== "undefined" ? __dirname : process.cwd();
@@ -45,6 +44,32 @@ async function startServer() {
     next();
   });
 
+  // Minimal per-IP/per-route rate limiter (fixed 1-minute window, no dependency)
+  const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+  const rateLimit = (maxPerMinute: number) => {
+    return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      const now = Date.now();
+      if (rateBuckets.size > 10000) {
+        for (const [key, bucket] of rateBuckets) {
+          if (bucket.resetAt < now) rateBuckets.delete(key);
+        }
+      }
+      const routePrefix = req.path.split("/").slice(0, 3).join("/");
+      const key = `${req.ip}|${req.method} ${routePrefix}`;
+      const bucket = rateBuckets.get(key);
+      if (!bucket || bucket.resetAt < now) {
+        rateBuckets.set(key, { count: 1, resetAt: now + 60_000 });
+        return next();
+      }
+      if (bucket.count >= maxPerMinute) {
+        res.setHeader("Retry-After", Math.ceil((bucket.resetAt - now) / 1000).toString());
+        return res.status(429).json({ error: "Trop de requêtes, réessayez dans une minute." });
+      }
+      bucket.count++;
+      next();
+    };
+  };
+
   // --- API ROUTES ---
   
   app.get("/api/health", (req, res) => {
@@ -52,15 +77,33 @@ async function startServer() {
     res.send("STABLE");
   });
 
-  app.get("/api/proxy", async (req, res) => {
+  // The proxy exists only to fetch Firebase Storage images with CORS headers
+  // for canvas compositing — restrict it to those hosts to prevent SSRF abuse
+  // (fetching internal endpoints like the GCP metadata server through it).
+  const PROXY_ALLOWED_HOSTS = new Set([
+    "firebasestorage.googleapis.com",
+    "storage.googleapis.com",
+  ]);
+
+  app.get("/api/proxy", rateLimit(60), async (req, res) => {
     try {
       const url = req.query.url;
       if (!url || typeof url !== "string") {
         return res.status(400).json({ error: "No URL provided" });
       }
 
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(url);
+      } catch {
+        return res.status(400).json({ error: "Invalid URL" });
+      }
+      if (parsedUrl.protocol !== "https:" || !PROXY_ALLOWED_HOSTS.has(parsedUrl.hostname)) {
+        return res.status(403).json({ error: "Proxy restricted to Firebase/Google Cloud Storage URLs" });
+      }
+
       console.log(`[Proxy] Fetching CORS-restricted resource: ${url}`);
-      const response = await fetch(url);
+      const response = await fetch(parsedUrl);
       if (!response.ok) {
         return res.status(response.status).json({ error: `Failed to fetch: ${response.statusText}` });
       }
@@ -82,11 +125,17 @@ async function startServer() {
     }
   });
 
-  app.post("/api/upload-export-file", (req, res) => {
+  app.post("/api/upload-export-file", rateLimit(30), (req, res) => {
     try {
       const { jobId, type, dataUrl } = req.body;
       if (!jobId || !type || !dataUrl) {
         return res.status(400).json({ error: "Missing required fields (jobId, type, dataUrl)" });
+      }
+
+      // jobId is used to build a filename on disk: reject anything that could
+      // escape the upload directory (e.g. "../../")
+      if (typeof jobId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(jobId)) {
+        return res.status(400).json({ error: "Invalid jobId format" });
       }
 
       const matches = dataUrl.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
@@ -134,23 +183,25 @@ async function startServer() {
     }
   });
 
-  app.post("/api/remove-background", async (req, res) => {
+  app.post("/api/remove-background", rateLimit(10), async (req, res) => {
     try {
       const { image } = req.body;
       if (!image) {
         return res.status(400).json({ error: "No image provided" });
       }
 
-      let apiKey = process.env.PHOTOROOM_API_KEY || process.env.CLIPDROP_API_KEY;
-      let usingSandbox = false;
+      // The API key must come from the environment (Secrets panel) — never
+      // hardcode a key in a public repository, even a sandbox one.
+      const apiKey = process.env.PHOTOROOM_API_KEY || process.env.CLIPDROP_API_KEY;
 
-      if (!apiKey || apiKey.trim() === "" || apiKey === "MY_CLIPDROP_API_KEY") {
-        apiKey = "sandbox_sk_pr_default_178d58b2463e916841163cacaa937ebb4aaa70c3";
-        usingSandbox = true;
-        console.log("[Photoroom] Using sandbox API Key from user instructions.");
-      } else {
-        console.log("[Photoroom] Using configured API Key from environment.");
+      if (!apiKey || apiKey.trim() === "" || apiKey === "MY_CLIPDROP_API_KEY" || apiKey === "MY_PHOTOROOM_API_KEY") {
+        console.error("[Photoroom] No API key configured (PHOTOROOM_API_KEY).");
+        return res.status(503).json({
+          error: "Clé API Photoroom non configurée. Ajoutez PHOTOROOM_API_KEY dans le panneau Secrets (AI Studio) ou l'environnement du serveur."
+        });
       }
+      console.log("[Photoroom] Using configured API Key from environment.");
+      const usingSandbox = apiKey.startsWith("sandbox_");
 
       // Convert base64 to Buffer
       const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
@@ -217,7 +268,17 @@ async function startServer() {
   // Simple in-memory database for jobs fallback
   const fallbackJobs = new Map<string, any>();
 
-  app.post("/api/jobs", (req, res) => {
+  // Prevent unbounded memory growth: evict the oldest jobs beyond the cap
+  const pruneFallbackJobs = () => {
+    const MAX_FALLBACK_JOBS = 200;
+    while (fallbackJobs.size > MAX_FALLBACK_JOBS) {
+      const oldestKey = fallbackJobs.keys().next().value;
+      if (oldestKey === undefined) break;
+      fallbackJobs.delete(oldestKey);
+    }
+  };
+
+  app.post("/api/jobs", rateLimit(60), (req, res) => {
     try {
       const { jobId, jobData } = req.body;
       if (!jobId || !jobData) {
@@ -227,6 +288,7 @@ async function startServer() {
         ...jobData,
         updatedAt: new Date().toISOString()
       });
+      pruneFallbackJobs();
       console.log(`[Fallback DB] Saved job ${jobId}`);
       return res.json({ success: true });
     } catch (error: any) {
@@ -234,7 +296,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/jobs/:jobId", (req, res) => {
+  app.get("/api/jobs/:jobId", rateLimit(120), (req, res) => {
     const { jobId } = req.params;
     const job = fallbackJobs.get(jobId);
     if (!job) {
@@ -243,7 +305,7 @@ async function startServer() {
     return res.json(job);
   });
 
-  app.put("/api/jobs/:jobId", (req, res) => {
+  app.put("/api/jobs/:jobId", rateLimit(60), (req, res) => {
     try {
       const { jobId } = req.params;
       const updateData = req.body;
@@ -254,6 +316,7 @@ async function startServer() {
           ...updateData,
           updatedAt: new Date().toISOString()
         });
+        pruneFallbackJobs();
         return res.json({ success: true });
       }
       const updated = {
@@ -294,6 +357,8 @@ async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     console.log("[Server] Initializing Vite middleware...");
     try {
+      // Imported lazily so the production bundle never loads Vite
+      const { createServer: createViteServer } = await import("vite");
       viteInstance = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",
