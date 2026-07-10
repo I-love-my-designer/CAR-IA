@@ -46,7 +46,7 @@ import { cn } from '@/lib/utils';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { APP_ASSETS, type AssetCode } from './config_assets';
 import { getVisibleBoundingBox, calculateOptimizedTransform, type BoundingBox } from './lib/imageUtils';
-import { collection, doc, setDoc, updateDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, serverTimestamp, onSnapshot, getDocs } from 'firebase/firestore';
 import { db, customDb, oldDb, oldApp, storage, handleFirestoreError, OperationType } from './lib/firebase';
 import { ref, listAll, getDownloadURL, uploadString, uploadBytes } from 'firebase/storage';
 import { getAuth, signInAnonymously } from 'firebase/auth';
@@ -2303,7 +2303,10 @@ const compressPreviewJpeg = (
         }
 
         ctx.drawImage(img, 0, 0, width, height);
-        finalDataUrl = canvas.toDataURL("image/jpeg", 0.50);
+        // Higher quality: IMAGE_C is the model's composition reference and it
+        // reproduces its quality. It is uploaded to Storage (not embedded in the
+        // Firestore doc), so a larger, sharper JPEG has no size penalty.
+        finalDataUrl = canvas.toDataURL("image/jpeg", 0.9);
 
         if (finalDataUrl.length <= maxBase64Length) {
           console.log(`[JPEG Preview] Success at dimension ${currentDim}px. Size: ${Math.round(finalDataUrl.length / 1024)} KB`);
@@ -5460,150 +5463,39 @@ const MainApp = () => {
 
       if (!isSubscribed) return;
 
-      // 1. Subscribe to 'entries' on active database
-      try {
-        const unsub = onSnapshot(
-          collection(db, 'entries'),
-          (snapshot) => {
-            if (!isSubscribed) return;
-            const presets: Record<string, any> = {};
-            snapshot.forEach((doc) => {
-              presets[doc.id.trim().toUpperCase()] = doc.data();
-            });
-            currentNewLowerPresets = presets;
-            console.log("[Presets Listener] Syncing active database 'entries':", Object.keys(presets));
-            updateAllPresets();
-          },
-          (error) => {
-            console.warn("[Presets Listener] Active DB 'entries' listen error / suppressed:", error);
-            updateAllPresets();
-          }
-        );
-        unsubscribes.push(unsub);
-      } catch (e) {
-        console.error("[Presets Listener] Active DB 'entries' subscription failed:", e);
-      }
+      // Presets change very rarely, so we read them ONCE with getDocs instead of
+      // keeping live onSnapshot listeners on the whole collections. Live listeners
+      // re-read the entire collection on every page load/reconnect and were the
+      // cause of the massive Firestore read spikes. (One-time read = read once, stop.)
+      const loadPresetsOnce = async (
+        database: any,
+        collName: string,
+        assign: (p: Record<string, any>) => void,
+        label: string
+      ) => {
+        try {
+          const snapshot = await getDocs(collection(database, collName));
+          if (!isSubscribed) return;
+          const presets: Record<string, any> = {};
+          snapshot.forEach((d) => {
+            presets[d.id.trim().toUpperCase()] = d.data();
+          });
+          assign(presets);
+          console.log(`[Presets Load] ${label}: ${Object.keys(presets).length} presets`);
+          updateAllPresets();
+        } catch (error: any) {
+          console.log(`[Presets Load] ${label} skipped/suppressed:`, error?.message || error);
+          updateAllPresets();
+        }
+      };
 
-      // 2. Subscribe to 'Entries' on active database (case sensitivity safeguard)
-      try {
-        const unsub = onSnapshot(
-          collection(db, 'Entries'),
-          (snapshot) => {
-            if (!isSubscribed) return;
-            const presets: Record<string, any> = {};
-            snapshot.forEach((doc) => {
-              presets[doc.id.trim().toUpperCase()] = doc.data();
-            });
-            currentNewUpperPresets = presets;
-            console.log("[Presets Listener] Syncing active database 'Entries':", Object.keys(presets));
-            updateAllPresets();
-          },
-          (error) => {
-            console.warn("[Presets Listener] Active DB 'Entries' listen error / suppressed:", error);
-            updateAllPresets();
-          }
-        );
-        unsubscribes.push(unsub);
-      } catch (e) {
-        console.error("[Presets Listener] Active DB 'Entries' subscription failed:", e);
-      }
-
-      // 2b. Subscribe to 'entries' and 'Entries' on customDb (the user's explicit correct database)
-      try {
-        const unsub = onSnapshot(
-          collection(customDb, 'entries'),
-          (snapshot) => {
-            if (!isSubscribed) return;
-            const presets: Record<string, any> = {};
-            snapshot.forEach((doc) => {
-              presets[doc.id.trim().toUpperCase()] = doc.data();
-            });
-            currentCustomLowerPresets = presets;
-            console.log("[Presets Listener] Syncing custom database 'entries':", Object.keys(presets));
-            updateAllPresets();
-          },
-          (error) => {
-            console.log("[Presets Listener] Custom DB 'entries' is not active/permissive in this workspace (suppressed fallback):", error.message || error);
-            updateAllPresets();
-          }
-        );
-        unsubscribes.push(unsub);
-      } catch (e) {
-        console.error("[Presets Listener] Custom DB 'entries' subscription failed:", e);
-      }
-
-      try {
-        const unsub = onSnapshot(
-          collection(customDb, 'Entries'),
-          (snapshot) => {
-            if (!isSubscribed) return;
-            const presets: Record<string, any> = {};
-            snapshot.forEach((doc) => {
-              presets[doc.id.trim().toUpperCase()] = doc.data();
-            });
-            currentCustomUpperPresets = presets;
-            console.log("[Presets Listener] Syncing custom database 'Entries':", Object.keys(presets));
-            updateAllPresets();
-          },
-          (error) => {
-            console.log("[Presets Listener] Custom DB 'Entries' is not active/permissive in this workspace (suppressed fallback):", error.message || error);
-            updateAllPresets();
-          }
-        );
-        unsubscribes.push(unsub);
-      } catch (e) {
-        console.error("[Presets Listener] Custom DB 'Entries' subscription failed:", e);
-      }
-
-      // Subscribe to fallback database (only if distinct from the main database)
+      await loadPresetsOnce(db, 'entries', (p) => { currentNewLowerPresets = p; }, "active 'entries'");
+      await loadPresetsOnce(db, 'Entries', (p) => { currentNewUpperPresets = p; }, "active 'Entries'");
+      await loadPresetsOnce(customDb, 'entries', (p) => { currentCustomLowerPresets = p; }, "custom 'entries'");
+      await loadPresetsOnce(customDb, 'Entries', (p) => { currentCustomUpperPresets = p; }, "custom 'Entries'");
       if (oldDb !== db) {
-        // 3. Fallback database 'entries'
-        try {
-          const unsub = onSnapshot(
-            collection(oldDb, 'entries'),
-            (snapshot) => {
-              if (!isSubscribed) return;
-              const presets: Record<string, any> = {};
-              snapshot.forEach((doc) => {
-                presets[doc.id.trim().toUpperCase()] = doc.data();
-              });
-              currentOldLowerPresets = presets;
-              console.log("[Presets Listener] Syncing fallback database 'entries':", Object.keys(presets));
-              updateAllPresets();
-            },
-            (error) => {
-              console.warn("[Presets Listener Backup] Suppressed backup 'entries' listener failure:", error);
-              updateAllPresets();
-            }
-          );
-          unsubscribes.push(unsub);
-        } catch (e) {
-          console.error("[Presets Listener] Backup DB 'entries' subscription failed:", e);
-        }
-
-        // 4. Fallback database 'Entries'
-        try {
-          const unsub = onSnapshot(
-            collection(oldDb, 'Entries'),
-            (snapshot) => {
-              if (!isSubscribed) return;
-              const presets: Record<string, any> = {};
-              snapshot.forEach((doc) => {
-                presets[doc.id.trim().toUpperCase()] = doc.data();
-              });
-              currentOldUpperPresets = presets;
-              console.log("[Presets Listener] Syncing fallback database 'Entries':", Object.keys(presets));
-              updateAllPresets();
-            },
-            (error) => {
-              console.warn("[Presets Listener Backup] Suppressed backup 'Entries' listener failure:", error);
-              updateAllPresets();
-            }
-          );
-          unsubscribes.push(unsub);
-        } catch (e) {
-          console.error("[Presets Listener] Backup DB 'Entries' subscription failed:", e);
-        }
+        await loadPresetsOnce(oldDb, 'entries', (p) => { currentOldLowerPresets = p; }, "fallback 'entries'");
+        await loadPresetsOnce(oldDb, 'Entries', (p) => { currentOldUpperPresets = p; }, "fallback 'Entries'");
       }
     }
 
@@ -5940,15 +5832,35 @@ const MainApp = () => {
 
       const createMasterpieceComposition = async (
         stateVal: any,
-        presetsVal: any
-      ): Promise<string> => {
+        presetsVal: any,
+        opts: { brandingMode?: 'overlay' | 'integrated' } = {}
+      ): Promise<{ composite: string; brandingOverlay: string | null }> => {
+        // brandingMode "overlay" (default): logo/text are NOT baked into the
+        // composition (IMAGE_C stays clean); they are returned as a separate
+        // transparent layer for pixel-perfect post-production stamping.
+        // "integrated": logo/text are baked in as before (model renders them).
+        const brandingMode = opts.brandingMode === 'integrated' ? 'integrated' : 'overlay';
+        // The whole composition is authored on a 1280 reference grid, but we
+        // RENDER it onto a 2048px (2K) canvas so IMAGE_C is a high-resolution
+        // composition reference (IMAGE_A/B are natively >2K). context.scale()
+        // maps the 1280 coordinates onto 2048 pixels — no coordinate math changes.
+        const REF_GRID = 1280;
+        const RENDER_PX = 2048;
+        const RENDER_SCALE = RENDER_PX / REF_GRID;
         const canvas = document.createElement('canvas');
-        canvas.width = 1280;
-        canvas.height = 1280;
+        canvas.width = RENDER_PX;
+        canvas.height = RENDER_PX;
         const context = canvas.getContext('2d');
         if (!context) {
           throw new Error("Unable to get 2D canvas context");
         }
+        context.scale(RENDER_SCALE, RENDER_SCALE);
+        // Separate transparent canvas (same 2K render) that holds ONLY logo + text.
+        const overlayCanvas = document.createElement('canvas');
+        overlayCanvas.width = RENDER_PX;
+        overlayCanvas.height = RENDER_PX;
+        const overlayCtx = overlayCanvas.getContext('2d');
+        if (overlayCtx) overlayCtx.scale(RENDER_SCALE, RENDER_SCALE);
 
         const preset = getBrandingPreset(stateVal.envVariant, presetsVal || {});
 
@@ -6121,65 +6033,80 @@ const MainApp = () => {
         const effectiveText = stateVal.logoText || presetTextContent;
         const isTextVisible = (stateVal.showText !== false) && !!effectiveText && (getPropValue(preset, 'text') !== false);
 
-        // Draw Logo
-        if (isLogoVisible && logoImg) {
-          try {
-            const lx_c = (logoXPercent / 100) * 1280;
-            const ly_c = (logoYPercent / 100) * 1280;
-            const lSize = (logoSizePercent / 100) * 1280;
-            const lx = lx_c - lSize / 2;
-            const ly = ly_c - lSize / 2;
+        // Paint the logo + text onto a given context (used for both the baked
+        // composition in "integrated" mode and the separate transparent overlay).
+        const paintBranding = (ctx: CanvasRenderingContext2D) => {
+          // Draw Logo
+          if (isLogoVisible && logoImg) {
+            try {
+              const lx_c = (logoXPercent / 100) * 1280;
+              const ly_c = (logoYPercent / 100) * 1280;
+              const lSize = (logoSizePercent / 100) * 1280;
+              const lx = lx_c - lSize / 2;
+              const ly = ly_c - lSize / 2;
 
-            if (useColorFill && preset.logoColorFill) {
-               const tempCanvas = document.createElement('canvas');
-               tempCanvas.width = lSize;
-               tempCanvas.height = lSize;
-               const tempCtx = tempCanvas.getContext('2d');
-               if (tempCtx) {
-                 drawObjectContain(tempCtx, logoImg, 0, 0, lSize, lSize);
-                 tempCtx.globalCompositeOperation = 'source-in';
-                 tempCtx.fillStyle = preset.logoColorFill;
-                 tempCtx.fillRect(0, 0, lSize, lSize);
-                 context.drawImage(tempCanvas, lx, ly);
-               }
-            } else {
-              drawObjectContain(context, logoImg, lx, ly, lSize, lSize);
+              if (useColorFill && preset.logoColorFill) {
+                 const tempCanvas = document.createElement('canvas');
+                 tempCanvas.width = lSize;
+                 tempCanvas.height = lSize;
+                 const tempCtx = tempCanvas.getContext('2d');
+                 if (tempCtx) {
+                   drawObjectContain(tempCtx, logoImg, 0, 0, lSize, lSize);
+                   tempCtx.globalCompositeOperation = 'source-in';
+                   tempCtx.fillStyle = preset.logoColorFill;
+                   tempCtx.fillRect(0, 0, lSize, lSize);
+                   ctx.drawImage(tempCanvas, lx, ly);
+                 }
+              } else {
+                drawObjectContain(ctx, logoImg, lx, ly, lSize, lSize);
+              }
+            } catch (logoErr) {
+              console.error("Failed to draw logo on screenshot canvas", logoErr);
             }
-          } catch (logoErr) {
-            console.error("Failed to draw logo on screenshot canvas", logoErr);
           }
-        }
 
-        // Draw Text (Slogan)
-        if (isTextVisible) {
-          const textAlign = getPropValue(preset, 'textAlign');
-          const rawAlign = textAlign ? String(textAlign).toUpperCase().trim() : 'CENTRE';
-          let align: 'left' | 'right' | 'center' = 'center';
-          if (rawAlign === 'GAUCHE') align = 'left';
-          else if (rawAlign === 'DROITE') align = 'right';
+          // Draw Text (Slogan)
+          if (isTextVisible) {
+            const textAlign = getPropValue(preset, 'textAlign');
+            const rawAlign = textAlign ? String(textAlign).toUpperCase().trim() : 'CENTRE';
+            let align: 'left' | 'right' | 'center' = 'center';
+            if (rawAlign === 'GAUCHE') align = 'left';
+            else if (rawAlign === 'DROITE') align = 'right';
 
-          const tx = (textXPercent / 100) * 1280;
-          const ty = (textYPercent / 100) * 1280;
-          const fontSize = (textSizePercent / 100) * 1280;
+            const tx = (textXPercent / 100) * 1280;
+            const ty = (textYPercent / 100) * 1280;
+            const fontSize = (textSizePercent / 100) * 1280;
 
-          context.save();
-          context.textAlign = align;
-          context.textBaseline = 'middle';
-          context.font = `bold ${fontSize}px ${getPropValue(preset, 'textFont') || 'Inter'}`;
-          context.fillStyle = getEffectiveTextColor(preset);
+            ctx.save();
+            ctx.textAlign = align;
+            ctx.textBaseline = 'middle';
+            ctx.font = `bold ${fontSize}px ${getPropValue(preset, 'textFont') || 'Inter'}`;
+            ctx.fillStyle = getEffectiveTextColor(preset);
+            ctx.fillText(effectiveText, tx, ty);
+            ctx.restore();
+          }
+        };
 
-          context.fillText(effectiveText, tx, ty);
-          context.restore();
-        }
+        // Always render the branding onto the transparent overlay layer.
+        if (overlayCtx) paintBranding(overlayCtx);
+        // Bake it into the composition ONLY in integrated mode.
+        if (brandingMode === 'integrated') paintBranding(context);
 
-        return canvas.toDataURL('image/jpeg', 0.75);
+        const hasBranding = (isLogoVisible && !!logoImg) || isTextVisible;
+        return {
+          composite: canvas.toDataURL('image/jpeg', 0.92),
+          brandingOverlay: (hasBranding && overlayCtx) ? overlayCanvas.toDataURL('image/png') : null,
+        };
       };
 
       let roughCompositeBase64 = '';
+      let brandingOverlayBase64: string | null = null;
       try {
-        console.log("[PWA CANVAS COMPOSITE] Generating pixel-perfect 1024x768 masterpiece composition for NodeGen AI guide (imageC)...");
-        roughCompositeBase64 = await createMasterpieceComposition(state, brandingPresets);
-        console.log("[PWA CANVAS COMPOSITE] Generation successful! Compressed JPEG URL created successfully.");
+        console.log("[PWA CANVAS COMPOSITE] Generating pixel-perfect 1280x1280 masterpiece composition (clean IMAGE_C) + transparent branding layer...");
+        const composed = await createMasterpieceComposition(state, brandingPresets, { brandingMode: 'overlay' });
+        roughCompositeBase64 = composed.composite;
+        brandingOverlayBase64 = composed.brandingOverlay;
+        console.log("[PWA CANVAS COMPOSITE] Generation successful! Composite + branding overlay created.");
       } catch (mathCanvasErr) {
         console.error("[PWA CANVAS COMPOSITE] Custom compositor failed, falling back to html-to-image capture:", mathCanvasErr);
         const node = document.getElementById('pwa-composite-capture') || document.getElementById('masterpiece-capture');
@@ -6289,7 +6216,7 @@ const processVehicle = async () => {
 };
 const processPreview = async (base64Composite: string) => {
   const compressedPreview = base64Composite
-    ? await compressPreviewJpeg(base64Composite, 720, 100 * 1024)
+    ? await compressPreviewJpeg(base64Composite, 2048, 4 * 1024 * 1024)
     : '';
 
   let finalPreviewValue = compressedPreview;
@@ -6415,11 +6342,31 @@ const processPreview = async (base64Composite: string) => {
         return { resolvedLogoId, finalCustomLogoValue };
       };
 
-      console.log("[PWA OPTIMIZATION] Running vehicle, preview and logo pipelines in parallel...");
-      const [finalVehicleValue, finalPreviewValue, logoResults] = await Promise.all([
+      // Upload the transparent branding layer (logo + text) so the AI engine can
+      // stamp it crisp in post-production (Mode 1 "overlay"). Uploaded to Storage
+      // as a URL to avoid bloating the Firestore job document.
+      const processBrandingOverlay = async (): Promise<string | null> => {
+        if (!brandingOverlayBase64) return null;
+        try {
+          const userId = getAuth().currentUser?.uid || 'guest';
+          const overlayRef = ref(storage, `users/${userId}/branding/${jobId}_branding.png`);
+          const blob = dataURLtoBlob(brandingOverlayBase64);
+          await uploadBytes(overlayRef, blob, { contentType: 'image/png' });
+          const url = await getDownloadURL(overlayRef);
+          console.log("[PWA EXPORT BRANDING] Branding overlay uploaded:", url);
+          return url;
+        } catch (e) {
+          console.warn("[PWA EXPORT BRANDING] Storage upload failed, keeping overlay inline:", e);
+          return brandingOverlayBase64;
+        }
+      };
+
+      console.log("[PWA OPTIMIZATION] Running vehicle, preview, logo and branding pipelines in parallel...");
+      const [finalVehicleValue, finalPreviewValue, logoResults, brandingOverlayUrl] = await Promise.all([
         processVehicle(),
         processPreview(roughCompositeBase64),
-        processLogo()
+        processLogo(),
+        processBrandingOverlay()
       ]);
       const { resolvedLogoId, finalCustomLogoValue } = logoResults;
 
@@ -6530,7 +6477,12 @@ const processPreview = async (base64Composite: string) => {
         imageB: validatedImageB,
         imageC: validatedImageC,
         logo: state.showLogo ? (resolvedLogoId || null) : null,
-        
+
+        // Branding: Mode 1 "overlay" — logo/text applied crisp in post-prod from
+        // this transparent layer (IMAGE_C is kept clean). See CAR-IA-APP_API.
+        brandingMode: 'overlay',
+        brandingOverlay: brandingOverlayUrl || null,
+
         // Root level presentation properties mapped strictly onto the resolutionRef grid
         imageId: activePreset?.imageId || getImageIdForVariant(state.envVariant || '07A01A'),
         resolutionRef: refRes,
