@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toPng } from 'html-to-image';
+import { AuthProvider, useAuth } from './lib/authContext';
 import { 
   Camera, 
   ChevronRight, 
@@ -5042,8 +5043,66 @@ const GenerationScreen: React.FC<{
   );
 };
 
-const ResultScreen: React.FC<{ 
-  onReset: () => void, 
+// Texte du filigrane affiché aux invités (aperçu). À remplacer par le nom déposé de l'app.
+const GUEST_WATERMARK = 'DEMO MODE';
+
+// Incruste le filigrane DANS les pixels de l'image (≠ calque à l'écran) pour le
+// téléchargement des comptes gratuits. Renvoie un Blob JPEG, ou null si l'image
+// n'a pas pu être récupérée/dessinée (dans ce cas on ne livre PAS l'image propre).
+async function createWatermarkedBlob(srcUrl: string, text: string): Promise<Blob | null> {
+  try {
+    let blob: Blob | null = null;
+    if (srcUrl.startsWith('data:')) {
+      blob = await (await fetch(srcUrl)).blob();
+    } else {
+      try { const r = await fetch(srcUrl); if (r.ok) blob = await r.blob(); } catch { /* CORS → proxy */ }
+      if (!blob) {
+        try {
+          const r = await fetch(resolveApiUrl(`/api/proxy?url=${encodeURIComponent(srcUrl)}`));
+          if (r.ok) blob = await r.blob();
+        } catch { /* ignore */ }
+      }
+    }
+    if (!blob) return null;
+
+    const bmp = await createImageBitmap(blob);
+    const canvas = document.createElement('canvas');
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(bmp, 0, 0);
+
+    const w = canvas.width, h = canvas.height;
+    const fontSize = Math.max(20, Math.round(w * 0.032));
+    ctx.save();
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate((-30 * Math.PI) / 180);
+    ctx.font = `800 ${fontSize}px -apple-system, "Segoe UI", Roboto, sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.30)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const stepX = ctx.measureText(text).width + fontSize * 3;
+    const stepY = fontSize * 4;
+    const diag = Math.sqrt(w * w + h * h);
+    for (let y = -diag; y < diag; y += stepY) {
+      for (let x = -diag; x < diag; x += stepX) {
+        ctx.fillText(text, x, y);
+      }
+    }
+    ctx.restore();
+
+    return await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.92)
+    );
+  } catch (e) {
+    console.warn('[WATERMARK] createWatermarkedBlob:', e);
+    return null;
+  }
+}
+
+const ResultScreen: React.FC<{
+  onReset: () => void,
   onEdit: () => void,
   onChangeVehicle: () => void, 
   previewProps: any 
@@ -5052,8 +5111,67 @@ const ResultScreen: React.FC<{
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showMobileSaveModal, setShowMobileSaveModal] = useState(false);
   const [mobileImageUrl, setMobileImageUrl] = useState('');
+  const { isGuest, isEntitled, openAuth } = useAuth();
+  const [showUpsell, setShowUpsell] = useState(false);
+  const [pendingDownload, setPendingDownload] = useState(false);
 
-  const handleDownload = async () => {
+  // Point d'entrée du bouton Download — 3 cas :
+  //  • invité            → connexion d'abord, puis on reprend le flux
+  //  • compte gratuit    → téléchargement AVEC filigrane incrusté + écran d'upsell
+  //  • compte abonné/payé → téléchargement propre (HD, sans filigrane)
+  const handleDownload = () => {
+    if (isGuest) {
+      setPendingDownload(true);
+      openAuth('Créez un compte gratuit pour télécharger votre visuel.');
+      return;
+    }
+    if (!isEntitled) { doDownloadWatermarked(); return; }
+    doDownload();
+  };
+
+  // Reprend le téléchargement juste après une connexion réussie, en réévaluant
+  // l'état à jour (évite le piège de la « stale closure »).
+  useEffect(() => {
+    if (pendingDownload && !isGuest) {
+      setPendingDownload(false);
+      if (!isEntitled) doDownloadWatermarked(); else doDownload();
+    }
+  }, [pendingDownload, isGuest, isEntitled]);
+
+  // Compte gratuit : on incruste le filigrane DANS le fichier (le calque à l'écran
+  // ne suffit pas — sinon le fichier téléchargé serait propre). En cas d'échec de
+  // l'incrustation, on ne télécharge RIEN de propre : on pousse l'upsell.
+  const doDownloadWatermarked = async () => {
+    try {
+      setHasDownloaded(true);
+      const raw = previewProps.currentJobResult;
+      const srcUrl = raw
+        ? ((raw.startsWith('data:') || raw.startsWith('http://') || raw.startsWith('https://')) ? raw : `data:image/png;base64,${raw}`)
+        : '';
+      const blob = srcUrl ? await createWatermarkedBlob(srcUrl, GUEST_WATERMARK) : null;
+      if (blob) {
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        const file = new File([blob], `apercu-${Date.now()}.jpg`, { type: 'image/jpeg' });
+        if (isMobile && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+          try { await navigator.share({ files: [file], title: 'Aperçu' }); } catch { /* annulé */ }
+        } else {
+          const objectUrl = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.download = `apercu-${Date.now()}.jpg`;
+          link.href = objectUrl;
+          document.body.appendChild(link); link.click(); document.body.removeChild(link);
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+        }
+      }
+      // blob null → incrustation impossible : on n'expose pas l'image propre.
+    } catch (e) {
+      console.warn('[WATERMARK] Téléchargement filigrané échoué:', e);
+    } finally {
+      setShowUpsell(true);
+    }
+  };
+
+  const doDownload = async () => {
     try {
       setHasDownloaded(true);
       
@@ -5204,8 +5322,39 @@ const ResultScreen: React.FC<{
       <div className="space-y-2 relative">
         {/* Mobile Save Overlay (Safari/iOS/Android Friendly) */}
         <AnimatePresence>
+          {showUpsell && (
+            <div
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+              onClick={() => setShowUpsell(false)}
+            >
+              <div
+                className="w-full max-w-sm rounded-2xl border border-white/10 bg-zinc-900 p-6 text-center text-white shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="mb-3 text-3xl">✨</div>
+                <h2 className="mb-2 text-lg font-bold">Votre aperçu est prêt</h2>
+                <p className="mb-5 text-sm text-white/60">
+                  Il porte le filigrane « {GUEST_WATERMARK} ». Passez à une offre pour
+                  télécharger vos visuels en <strong className="text-white">HD, sans filigrane</strong>.
+                </p>
+                <button
+                  onClick={() => { setShowUpsell(false); openAuth('Les offres arrivent bientôt — merci de votre patience !'); }}
+                  className="mb-2 w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold hover:bg-emerald-500"
+                >
+                  Voir les offres HD
+                </button>
+                <button
+                  onClick={() => setShowUpsell(false)}
+                  className="w-full rounded-lg py-2 text-xs text-white/50 hover:text-white"
+                >
+                  Plus tard
+                </button>
+              </div>
+            </div>
+          )}
+
           {showMobileSaveModal && (
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -5290,12 +5439,39 @@ const ResultScreen: React.FC<{
               src={(previewProps.currentJobResult.startsWith('data:') || previewProps.currentJobResult.startsWith('http://') || previewProps.currentJobResult.startsWith('https://')) 
                 ? previewProps.currentJobResult 
                 : `data:image/png;base64,${previewProps.currentJobResult}`} 
-              className="w-full h-full object-contain" 
+              className="w-full h-full object-contain"
               alt="Final Masterpiece from NodeGen Studio"
               referrerPolicy="no-referrer"
+              draggable={isEntitled}
+              onDragStart={!isEntitled ? (e) => e.preventDefault() : undefined}
+              onContextMenu={!isEntitled ? (e) => e.preventDefault() : undefined}
+              style={!isEntitled ? ({ WebkitUserDrag: 'none', userSelect: 'none' } as React.CSSProperties) : undefined}
             />
           ) : (
             <SharedPreview {...previewProps} allowSweeps={false} hideDebugInfo={true} />
+          )}
+
+          {/* Filigrane : recouvre l'aperçu final de texte répété en diagonale
+              (quel que soit le mode d'affichage : <img> direct OU SharedPreview).
+              Visible tant que le compte n'est pas abonné/payé ; disparaît une fois entitlé. */}
+          {!isEntitled && (
+            <div
+              className="absolute inset-0 z-20 select-none overflow-hidden"
+              onContextMenu={(e) => e.preventDefault()}
+              onDragStart={(e) => e.preventDefault()}
+              draggable={false}
+            >
+              <div className="pointer-events-none absolute inset-[-50%] flex flex-wrap content-center items-center justify-center gap-x-10 gap-y-8 rotate-[-30deg]">
+                {Array.from({ length: 80 }).map((_, i) => (
+                  <span
+                    key={i}
+                    className="whitespace-nowrap text-lg font-extrabold uppercase tracking-[0.3em] text-white/20"
+                  >
+                    {GUEST_WATERMARK}
+                  </span>
+                ))}
+              </div>
+            </div>
           )}
         </div>
 
@@ -5344,10 +5520,12 @@ const ResultScreen: React.FC<{
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/doc" element={<ArchitectureTable />} />
-        <Route path="*" element={<MainApp />} />
-      </Routes>
+      <AuthProvider>
+        <Routes>
+          <Route path="/doc" element={<ArchitectureTable />} />
+          <Route path="*" element={<MainApp />} />
+        </Routes>
+      </AuthProvider>
     </BrowserRouter>
   );
 }
@@ -6516,8 +6694,13 @@ const processPreview = async (base64Composite: string) => {
 
         // Dynamic presets map directly to activePreset's resolutionRef (no hardcoded 1024 scaling)
         presetsFond: {
-          logoAutorise: getPropValue(activePreset, 'logo') !== false && getPropValue(activePreset, 'logo') !== 'false',
-          texteAutorise: getPropValue(activePreset, 'text') !== false && getPropValue(activePreset, 'text') !== 'false',
+          // « Autorisé » seulement si le preset le permet ET que l'utilisateur a
+          // réellement fourni un logo / un texte. Sinon le gatekeeper du moteur auto
+          // (app-API) attendrait indéfiniment un branding absent → génération bloquée.
+          logoAutorise: (getPropValue(activePreset, 'logo') !== false && getPropValue(activePreset, 'logo') !== 'false')
+            && state.showLogo && !!resolvedLogoId,
+          texteAutorise: (getPropValue(activePreset, 'text') !== false && getPropValue(activePreset, 'text') !== 'false')
+            && state.showText && !!(state.logoText && state.logoText.trim().length > 0),
           logoPlaceholderCoords: {
             x: logoXVal,
             y: logoYVal,

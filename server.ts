@@ -361,7 +361,9 @@ async function startServer() {
       // Imported lazily so the production bundle never loads Vite
       const { createServer: createViteServer } = await import("vite");
       viteInstance = await createViteServer({
-        server: { middlewareMode: true },
+        // Port HMR dédié (dérivé du PORT) pour ne pas entrer en conflit avec
+        // une autre app Vite tournant en parallèle (ex. l'app-API).
+        server: { middlewareMode: true, hmr: { port: PORT + 20000 } },
         appType: "spa",
       });
       app.use(viteInstance.middlewares);
