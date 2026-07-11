@@ -4829,7 +4829,7 @@ const GenerationScreen: React.FC<{
   const handleCopyConfig = () => {
     const configToCopy = {
       projectId: firebaseConfig.projectId || "gen-lang-client-0870404092",
-      firestoreDatabaseId: firebaseConfig.firestoreDatabaseId || "ai-studio-19f9c855-5777-40ac-9128-15c06d3c85ca"
+      firestoreDatabaseId: firebaseConfig.firestoreDatabaseId || "car-ia-photobooth"
     };
     navigator.clipboard.writeText(JSON.stringify(configToCopy, null, 2));
     setCopied(true);

@@ -13,7 +13,7 @@ const oldApp = getApps().find(a => a.name === 'fallback') || initializeApp({
 }, 'fallback');
 
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const customDb = getFirestore(app, "ai-studio-161890da-59e3-4b8c-988c-4938de8d8e21");
+export const customDb = getFirestore(app, "car-ia-photobooth");
 // To prevent "Database '(default)' not found" warnings when your project does not have a "(default)" database,
 // we fall back to using the active database ID. This is safe and prevents polling a non-existent database.
 export const oldDb = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)"
