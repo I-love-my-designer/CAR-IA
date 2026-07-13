@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { toPng } from 'html-to-image';
 import { AuthProvider, useAuth } from './lib/authContext';
 import { GUEST_WATERMARK, createWatermarkedBlob } from './lib/watermark';
+import { analyzeNeon } from './lib/colorDetect';
 import BrandKitModal, { loadBrandKit, type BrandKit } from './components/BrandKitModal';
 import { 
   Camera, 
@@ -49,7 +50,7 @@ import { cn } from '@/lib/utils';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { APP_ASSETS, type AssetCode } from './config_assets';
 import { getVisibleBoundingBox, calculateOptimizedTransform, type BoundingBox } from './lib/imageUtils';
-import { collection, doc, setDoc, updateDoc, serverTimestamp, onSnapshot, getDocs } from 'firebase/firestore';
+import { collection, doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot, getDocs } from 'firebase/firestore';
 import { db, customDb, oldDb, oldApp, storage, handleFirestoreError, OperationType } from './lib/firebase';
 import { ref, listAll, getDownloadURL, uploadString, uploadBytes } from 'firebase/storage';
 import { getAuth, signInAnonymously } from 'firebase/auth';
@@ -1045,6 +1046,7 @@ const SharedPreview = ({
   logoGridPosition,
   colorTheme,
   colorIntensity = 1,
+  neonMask = null,
   isIsolated = false,
   showPlatform = true,
   highlightStep = -1, // -1: none, 0: bg, 1: base, 2: vehicle
@@ -1806,15 +1808,31 @@ const SharedPreview = ({
         </div>
       )}
 
-      {/* Color Theme Overlay */}
-      <div 
-        className="absolute inset-0 pointer-events-none z-40"
-        style={{ 
-          backgroundColor: colorTheme, 
-          opacity: 0.2 * colorIntensity,
-          mixBlendMode: 'overlay' 
-        }}
-      />
+      {/* Calque couleur : NÉON UNIQUEMENT via le masque (CSS mask) si dispo — sinon
+          teinte globale de repli. mixBlendMode 'color' = recolore le néon en gardant
+          sa luminosité (donc un vrai changement de couleur du néon, pas un voile). */}
+      {colorIntensity > 0 && (
+        <div
+          className="absolute top-1/2 left-0 w-full aspect-square -translate-y-1/2 overflow-hidden pointer-events-none z-[1]"
+          style={neonMask ? {
+            backgroundColor: colorTheme,
+            WebkitMaskImage: `url(${neonMask})`,
+            maskImage: `url(${neonMask})`,
+            WebkitMaskSize: 'cover',
+            maskSize: 'cover',
+            WebkitMaskPosition: 'center',
+            maskPosition: 'center',
+            opacity: Math.min(1, 0.85 * colorIntensity),
+            // 'hard-light' recolore le néon même quand il est blanc/très lumineux
+            // (contrairement à 'color' qui garde la luminosité → invisible sur du blanc).
+            mixBlendMode: 'hard-light',
+          } : {
+            backgroundColor: colorTheme,
+            opacity: 0.2 * colorIntensity,
+            mixBlendMode: 'overlay',
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -5563,6 +5581,51 @@ const MainApp = () => {
     return {};
   });
 
+  // Masque du néon (data URL) pour teinter UNIQUEMENT le néon dans l'aperçu (CSS mask).
+  const [neonMask, setNeonMask] = useState<string | null>(null);
+
+  // Lecture CIBLÉE de la table du fond sélectionné : dès qu'un fond est choisi, on
+  // interroge `entries/{imageId}` (1 seul doc) pour récupérer immédiatement une table
+  // fraîchement créée/modifiée dans Sheetsync, sans attendre un rechargement complet.
+  // Fusionnée dans brandingPresets → getBrandingPreset la trouve (sinon « A blanc »).
+  useEffect(() => {
+    const imageId = getImageIdForVariant(state.envVariant);
+    if (!imageId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(customDb, 'entries', imageId));
+        let preset: any = null;
+        if (!cancelled && snap.exists()) {
+          preset = snap.data();
+          setBrandingPresets(prev => ({ ...prev, [imageId]: preset }));
+          console.log(`[Presets] Table du fond '${imageId}' récupérée à la sélection.`);
+        }
+        // Si le fond autorise la couleur : détecter la teinte du néon et positionner
+        // le curseur du nuancier dessus (couleur de départ = couleur actuelle du néon).
+        const rawEnabled = preset ? getPropValue(preset, 'imageColorFillEnabled') : undefined;
+        const colorEnabled = rawEnabled === true || String(rawEnabled).toLowerCase() === 'true';
+        if (colorEnabled && !cancelled) {
+          let bgUrl = '';
+          try { bgUrl = resolveImageAForFirestore(state.envVariant || ''); } catch { bgUrl = ''; }
+          if (bgUrl) {
+            const res = await analyzeNeon(bgUrl, (u) => resolveApiUrl(`/api/proxy?url=${encodeURIComponent(u)}`));
+            if (res && !cancelled) {
+              setState(prev => ({ ...prev, colorTheme: res.hex }));
+              setNeonMask(res.mask);
+              console.log(`[Couleur] Néon détecté sur '${imageId}' : ${res.hex}`);
+            }
+          }
+        } else if (!cancelled) {
+          setNeonMask(null); // fond sans couleur → pas de masque
+        }
+      } catch {
+        /* silencieux : on garde le cache / la table par défaut « A blanc » */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [state.envVariant]);
+
   // Real-time listener for the Firestore branding presets in entries with localStorage offline redundancy
   useEffect(() => {
     let isSubscribed = true;
@@ -6698,6 +6761,13 @@ const processPreview = async (base64Composite: string) => {
             && state.showLogo && !!resolvedLogoId,
           texteAutorise: (getPropValue(activePreset, 'text') !== false && getPropValue(activePreset, 'text') !== 'false')
             && state.showText && !!(state.logoText && state.logoText.trim().length > 0),
+          // Recolorisation ciblée du néon (piloté par la table du fond). L'app-API
+          // ajoute au prompt : « recolore uniquement le néon (+ murs si activé) en <hex> ».
+          imageColorFillEnabled: getPropValue(activePreset, 'imageColorFillEnabled') === true
+            || String(getPropValue(activePreset, 'imageColorFillEnabled')).toLowerCase() === 'true',
+          imageColorFillWalls: getPropValue(activePreset, 'imageColorFillWalls') === true
+            || String(getPropValue(activePreset, 'imageColorFillWalls')).toLowerCase() === 'true',
+          imageColorFillTarget: state.colorTheme || '',
           logoPlaceholderCoords: {
             x: logoXVal,
             y: logoYVal,
@@ -7017,6 +7087,8 @@ const processPreview = async (base64Composite: string) => {
   const activeColorPreset = getBrandingPreset(state.envVariant, brandingPresets || {});
   const rawColorAllowed = getPropValue(activeColorPreset, 'imageColorFillEnabled');
   const colorAllowed = rawColorAllowed === true || String(rawColorAllowed).toLowerCase() === 'true';
+  // L'aperçu couleur ne s'affiche que sur l'écran couleur (et live preview) : ailleurs, vrai fond.
+  const colorPreviewActive = colorAllowed && (state.screen === 'color_light' || state.screen === 'live_preview');
 
   const next = (screen: Screen) => {
     // Le fond n'autorise pas la couleur → on saute l'écran couleur.
@@ -7061,9 +7133,11 @@ const processPreview = async (base64Composite: string) => {
     logoText: state.logoText,
     logoType: state.logoType,
     logoGridPosition: state.logoGridPosition,
-    // Couleur appliquée seulement si le fond l'autorise (sinon calque neutralisé).
-    colorTheme: colorAllowed ? state.colorTheme : '#ffffff',
-    colorIntensity: colorAllowed ? state.colorIntensity : 0,
+    // Couleur (aperçu) : seulement si le fond l'autorise ET sur l'écran couleur/live preview.
+    // → l'écran Environment montre le vrai fond ; ailleurs pas de teinte parasite.
+    colorTheme: colorPreviewActive ? state.colorTheme : '#ffffff',
+    colorIntensity: colorPreviewActive ? state.colorIntensity : 0,
+    neonMask: colorPreviewActive ? neonMask : null,
     isIsolated: state.isIsolated,
     showPlatform,
     showLogo: state.showLogo,
