@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toPng } from 'html-to-image';
 import { AuthProvider, useAuth } from './lib/authContext';
+import { GUEST_WATERMARK, createWatermarkedBlob } from './lib/watermark';
+import BrandKitModal, { loadBrandKit, type BrandKit } from './components/BrandKitModal';
 import { 
   Camera, 
   ChevronRight, 
@@ -700,7 +702,9 @@ const propAliases: Record<string, string[]> = {
   textColorFillEnabled: ['L1', 'textColorFillActive', 'textColorFillEnabled', 'text_color_fill_active', 'textColorFillActiveEnabled'],
   textColorFill: ['L', 'textColorFill', 'textColor', 'text_color_fill', 'colorFillText'],
   promptIaText: ['N', 'promptIaText', 'prompt_ia_text'],
-  promptActifText: ['NA', 'promptActifText', 'prompt_actif_text']
+  promptActifText: ['NA', 'promptActifText', 'prompt_actif_text'],
+  // Autorise (ou non) le changement de couleur d'ambiance/néon du fond. Défaut : non.
+  imageColorFillEnabled: ['M1', 'imageColorFillEnabled', 'imageColorFillActive', 'image_color_fill_enabled', 'colorEditable', 'sceneColorEnabled', 'ambianceColorEnabled']
 };
 
 const getPropValue = (obj: any, key: string, fallback: any = undefined): any => {
@@ -5043,63 +5047,8 @@ const GenerationScreen: React.FC<{
   );
 };
 
-// Texte du filigrane affiché aux invités (aperçu). À remplacer par le nom déposé de l'app.
-const GUEST_WATERMARK = 'DEMO MODE';
-
-// Incruste le filigrane DANS les pixels de l'image (≠ calque à l'écran) pour le
-// téléchargement des comptes gratuits. Renvoie un Blob JPEG, ou null si l'image
-// n'a pas pu être récupérée/dessinée (dans ce cas on ne livre PAS l'image propre).
-async function createWatermarkedBlob(srcUrl: string, text: string): Promise<Blob | null> {
-  try {
-    let blob: Blob | null = null;
-    if (srcUrl.startsWith('data:')) {
-      blob = await (await fetch(srcUrl)).blob();
-    } else {
-      try { const r = await fetch(srcUrl); if (r.ok) blob = await r.blob(); } catch { /* CORS → proxy */ }
-      if (!blob) {
-        try {
-          const r = await fetch(resolveApiUrl(`/api/proxy?url=${encodeURIComponent(srcUrl)}`));
-          if (r.ok) blob = await r.blob();
-        } catch { /* ignore */ }
-      }
-    }
-    if (!blob) return null;
-
-    const bmp = await createImageBitmap(blob);
-    const canvas = document.createElement('canvas');
-    canvas.width = bmp.width;
-    canvas.height = bmp.height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.drawImage(bmp, 0, 0);
-
-    const w = canvas.width, h = canvas.height;
-    const fontSize = Math.max(20, Math.round(w * 0.032));
-    ctx.save();
-    ctx.translate(w / 2, h / 2);
-    ctx.rotate((-30 * Math.PI) / 180);
-    ctx.font = `800 ${fontSize}px -apple-system, "Segoe UI", Roboto, sans-serif`;
-    ctx.fillStyle = 'rgba(255,255,255,0.30)';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const stepX = ctx.measureText(text).width + fontSize * 3;
-    const stepY = fontSize * 4;
-    const diag = Math.sqrt(w * w + h * h);
-    for (let y = -diag; y < diag; y += stepY) {
-      for (let x = -diag; x < diag; x += stepX) {
-        ctx.fillText(text, x, y);
-      }
-    }
-    ctx.restore();
-
-    return await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.92)
-    );
-  } catch (e) {
-    console.warn('[WATERMARK] createWatermarkedBlob:', e);
-    return null;
-  }
-}
+// GUEST_WATERMARK et createWatermarkedBlob sont désormais dans ./lib/watermark
+// (partagés avec l'historique « Mes créations »).
 
 const ResultScreen: React.FC<{
   onReset: () => void,
@@ -5148,7 +5097,9 @@ const ResultScreen: React.FC<{
       const srcUrl = raw
         ? ((raw.startsWith('data:') || raw.startsWith('http://') || raw.startsWith('https://')) ? raw : `data:image/png;base64,${raw}`)
         : '';
-      const blob = srcUrl ? await createWatermarkedBlob(srcUrl, GUEST_WATERMARK) : null;
+      const blob = srcUrl
+        ? await createWatermarkedBlob(srcUrl, GUEST_WATERMARK, (u) => resolveApiUrl(`/api/proxy?url=${encodeURIComponent(u)}`))
+        : null;
       if (blob) {
         const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
         const file = new File([blob], `apercu-${Date.now()}.jpg`, { type: 'image/jpeg' });
@@ -5557,6 +5508,45 @@ const MainApp = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [state, setState] = useState<AppState>(INITIAL_STATE);
+  const { user: authUser, isGuest: authGuest, brandKitOpen, closeBrandKit } = useAuth();
+  const brandKitAppliedRef = useRef(false);
+
+  // Applique un Brand Kit (logo + couleur + slogan) à l'état de génération courant.
+  const applyBrandKit = (kit: BrandKit) => {
+    setState((prev) => ({
+      ...prev,
+      customLogo: kit.logoUrl ?? prev.customLogo,
+      logoType: kit.logoUrl ? 'upload' : prev.logoType,
+      showLogo: kit.logoUrl ? true : prev.showLogo,
+      logoText: kit.slogan || prev.logoText,
+      showText: kit.slogan ? true : prev.showText,
+      colorTheme: kit.brandColor || prev.colorTheme,
+    }));
+  };
+
+  // Préremplissage automatique au 1er login d'une session : si l'utilisateur a un
+  // Brand Kit et n'a pas encore renseigné son branding, on l'applique (une seule fois).
+  useEffect(() => {
+    const uid = authUser?.uid;
+    if (!uid || authGuest || brandKitAppliedRef.current) return;
+    brandKitAppliedRef.current = true;
+    (async () => {
+      const kit = await loadBrandKit(uid);
+      if (!kit || (!kit.logoUrl && !kit.slogan)) return;
+      setState((prev) => {
+        if (prev.customLogo || prev.logoText) return prev; // déjà renseigné → on ne force pas
+        return {
+          ...prev,
+          customLogo: kit.logoUrl ?? prev.customLogo,
+          logoType: kit.logoUrl ? 'upload' : prev.logoType,
+          showLogo: kit.logoUrl ? true : prev.showLogo,
+          logoText: kit.slogan || prev.logoText,
+          showText: kit.slogan ? true : prev.showText,
+          colorTheme: kit.brandColor || prev.colorTheme,
+        };
+      });
+    })();
+  }, [authUser, authGuest]);
   const lastAutoFittedBlob = useRef<{ image: string | null; bbox: any }>({ image: null, bbox: null });
   const [isStorageIndexed, setIsStorageIndexed] = useState(false);
   const [brandingPresets, setBrandingPresets] = useState<Record<string, any>>(() => {
@@ -7015,7 +7005,15 @@ const processPreview = async (base64Composite: string) => {
     applyAutoFit();
   }, [state.screen, state.image, state.boundingBox]);
 
+  // Le fond autorise-t-il le changement de couleur (néon/LED) ? Piloté par le preset
+  // du fond via le champ `imageColorFillEnabled`. Défaut (champ absent) = NON autorisé.
+  const activeColorPreset = getBrandingPreset(state.envVariant, brandingPresets || {});
+  const rawColorAllowed = getPropValue(activeColorPreset, 'imageColorFillEnabled');
+  const colorAllowed = rawColorAllowed === true || String(rawColorAllowed).toLowerCase() === 'true';
+
   const next = (screen: Screen) => {
+    // Le fond n'autorise pas la couleur → on saute l'écran couleur.
+    if (screen === 'color_light' && !colorAllowed) screen = 'live_preview';
     setState(s => {
       // If we are returning to review and just finished upload, go straight to live_preview/result
       if (s.returnToReview && s.screen === 'upload' && screen === 'ad_style') {
@@ -7025,6 +7023,8 @@ const processPreview = async (base64Composite: string) => {
     });
   };
   const back = (screen: Screen) => {
+    // Symétrique : en revenant, on saute aussi l'écran couleur si le fond ne l'autorise pas.
+    if (screen === 'color_light' && !colorAllowed) screen = 'branding_logo';
     setState(s => ({ ...s, screen }));
   };
 
@@ -7054,8 +7054,9 @@ const processPreview = async (base64Composite: string) => {
     logoText: state.logoText,
     logoType: state.logoType,
     logoGridPosition: state.logoGridPosition,
-    colorTheme: state.colorTheme,
-    colorIntensity: state.colorIntensity,
+    // Couleur appliquée seulement si le fond l'autorise (sinon calque neutralisé).
+    colorTheme: colorAllowed ? state.colorTheme : '#ffffff',
+    colorIntensity: colorAllowed ? state.colorIntensity : 0,
     isIsolated: state.isIsolated,
     showPlatform,
     showLogo: state.showLogo,
@@ -7275,10 +7276,17 @@ const processPreview = async (base64Composite: string) => {
             onReset={() => setState(INITIAL_STATE)} 
             onEdit={() => setState(s => ({ ...s, screen: 'live_preview', isJumpingBack: true }))}
             onChangeVehicle={() => setState(s => ({ ...s, screen: 'upload', returnToReview: true, isJumpingBack: true }))}
-            previewProps={previewProps} 
+            previewProps={previewProps}
           />
         )}
       </AnimatePresence>
+
+      <BrandKitModal
+        open={brandKitOpen}
+        onClose={closeBrandKit}
+        userId={authUser?.uid ?? null}
+        onApply={applyBrandKit}
+      />
     </div>
   );
 }

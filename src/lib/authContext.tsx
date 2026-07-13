@@ -3,6 +3,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { subscribeAuth, ensureGuest, isGuest, logout, type AuthUser } from './auth';
 import { customDb } from './firebase';
 import AuthModal from '../components/AuthModal';
+import HistoryModal from '../components/HistoryModal';
 
 interface AuthCtx {
   user: AuthUser | null;
@@ -13,6 +14,10 @@ interface AuthCtx {
   /** Run `onSuccess` if already signed in, otherwise open the login modal first. */
   requireAccount: (reason?: string, onSuccess?: () => void) => void;
   openAuth: (reason?: string) => void;
+  /** Brand Kit modal open state — rendered by MainApp (needs generation state to apply). */
+  brandKitOpen: boolean;
+  openBrandKit: () => void;
+  closeBrandKit: () => void;
   logout: () => Promise<void>;
 }
 
@@ -29,6 +34,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [plan, setPlan] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [brandKitOpen, setBrandKitOpen] = useState(false);
   const [reason, setReason] = useState<string | undefined>(undefined);
   const pending = useRef<(() => void) | null>(null);
 
@@ -74,7 +81,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <Ctx.Provider value={{ user, isGuest: guest, isEntitled, plan, requireAccount, openAuth, logout }}>
+    <Ctx.Provider value={{ user, isGuest: guest, isEntitled, plan, requireAccount, openAuth, brandKitOpen, openBrandKit: () => setBrandKitOpen(true), closeBrandKit: () => setBrandKitOpen(false), logout }}>
       {children}
 
       {/* Floating account chip — available on every screen, non-invasive */}
@@ -89,7 +96,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             </button>
           ) : (
             <div className="flex items-center gap-2 rounded-full border border-white/15 bg-black/50 px-3 py-1.5 text-xs text-white backdrop-blur">
-              <span className="max-w-[160px] truncate text-white/80">
+              <button
+                onClick={() => setHistoryOpen(true)}
+                className="font-medium text-white/80 hover:text-white"
+                title="Mes créations"
+              >
+                🖼️ Mes créations
+              </button>
+              <span className="text-white/20">·</span>
+              <button
+                onClick={() => setBrandKitOpen(true)}
+                className="font-medium text-white/80 hover:text-white"
+                title="Mon Brand Kit"
+              >
+                🎨 Brand Kit
+              </button>
+              <span className="text-white/20">·</span>
+              <span className="max-w-[120px] truncate text-white/50" title={user?.email || undefined}>
                 {user?.displayName || user?.email || 'Mon compte'}
               </span>
               <button onClick={() => logout()} className="text-white/50 hover:text-white" title="Se déconnecter">⎋</button>
@@ -103,6 +126,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         reason={reason}
         onClose={() => setModalOpen(false)}
         onSuccess={onSuccess}
+      />
+
+      <HistoryModal
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        userId={user?.uid ?? null}
+        isEntitled={isEntitled}
       />
     </Ctx.Provider>
   );
