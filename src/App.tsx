@@ -243,7 +243,7 @@ const STORAGE_PREFIX_MAP: Record<string, string> = {
   '07C01': 'OUTSIDE',
   '07C02': 'STUDIO',
   '07C03': 'CONCRETE',
-  '07C04': 'WOOD',
+  '07C04': 'LED',
 
   // 4. MINIMAL (07D)
   '07D01': 'LANDSCAPE',
@@ -270,10 +270,11 @@ const getFirebaseStorageAssetUrl = (effectiveCode: string): string | null => {
   const letter = effectiveCode.substring(5) || 'A';
   const indexStr = letterToTwoDigits(letter); // e.g. "01"
   const filename = `${prefix} ${indexStr}.jpg`;
-  
-  // Public Firebase Storage URL format
+
+  // Public Firebase Storage URL format.
+  // Les fonds sont rangés par style : ENVIRONMENTS/{STYLE}/{STYLE NN}.jpg
   const bucketName = "gen-lang-client-0870404092.firebasestorage.app";
-  const encodedPath = encodeURIComponent(`ENVIRONMENTS/${filename}`);
+  const encodedPath = encodeURIComponent(`ENVIRONMENTS/${prefix}/${filename}`);
   return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodedPath}?alt=media`;
 };
 
@@ -327,9 +328,9 @@ const VARIANT_LIMITS: Record<string, string> = {
   '07B03': 'E', // MONTAGNE 01 -> MONTAGNE 05
   '07B04': 'D', // SEASIDE 01 -> SEASIDE 04
   '07C01': 'D', // OUTSIDE 01 -> OUTSIDE 04
-  '07C02': 'E', // STUDIO 01 -> STUDIO 05
+  '07C02': 'X', // STUDIO 01 -> STUDIO 24 (inclut les ex-WOOD 020-024)
   '07C03': 'E', // CONCRETE 01 -> CONCRETE 05
-  '07C04': 'D', // WOOD 01 -> WOOD 04
+  '07C04': 'M', // LED 01 -> LED 13 (ex-slot WOOD, désormais LED)
   '07D01': 'D', // LANDSCAPE 01 -> LANDSCAPE 04
   '07D02': 'D', // ARCHI 01 -> ARCHI 04
   '07D03': 'D', // MTX 01 -> MTX 04
@@ -923,8 +924,8 @@ const getStaticFallbackPreset = (imageId: string) => {
     textPosition = "180-1140";
     textSize = "32";
     logoSize = "170";
-  } else if (upper.includes("WOOD")) {
-    // Wood has logo bottom center, text bottom center
+  } else if (upper.includes("LED")) {
+    // LED : logo bas-centre, texte bas-centre (défaut ; les vrais réglages viennent des presets)
     imagePosition = "640-1120";
     textPosition = "640-1180";
     textSize = "32";
@@ -3223,7 +3224,7 @@ const VARIANTS: Record<string, { id: string, label: string, img: string, code: s
     { id: '07C01', label: 'OUTSIDE', img: getAssetUrl('07C01A'), code: '07C01' },
     { id: '07C02', label: 'STUDIO', img: getAssetUrl('07C02A'), code: '07C02' },
     { id: '07C03', label: 'Concrete', img: getAssetUrl('07C03A'), code: '07C03' },
-    { id: '07C04', label: 'Wood', img: getAssetUrl('07C04A'), code: '07C04' },
+    { id: '07C04', label: 'LED', img: getAssetUrl('07C04A'), code: '07C04' },
   ],
   future: [
     { id: '07D01', label: 'Landscapes', img: getAssetUrl('07D01A'), code: '07D01' },
@@ -5682,10 +5683,16 @@ const MainApp = () => {
       try {
         console.log("[Storage Index] Starting background crawl of 'ENVIRONMENTS'...");
         const environmentsRef = ref(storage, 'ENVIRONMENTS');
-        const result = await listAll(environmentsRef);
-        
+        const topResult = await listAll(environmentsRef);
+        // Les fonds sont désormais rangés en sous-dossiers par style (ENVIRONMENTS/CITY/…).
+        // On agrège les fichiers de chaque sous-dossier + ceux éventuellement restés à la racine.
+        const subItems = await Promise.all(
+          topResult.prefixes.map(p => listAll(p).then(r => r.items).catch(() => []))
+        );
+        const allItems = [...topResult.items, ...subItems.flat()];
+
         const prefixCounts: Record<string, number> = {};
-        const promises = result.items.map(async (item) => {
+        const promises = allItems.map(async (item) => {
           try {
             const url = await getDownloadURL(item);
             const nameUpper = item.name.trim().toUpperCase();
