@@ -58,6 +58,13 @@ import firebaseConfig from '../firebase-applet-config.json';
 
 const storageAssetCache: Record<string, string> = {};
 const storageAssetLimitsCache: Record<string, string> = {};
+// Variantes RÉELLEMENT présentes par style (rempli par le crawl Storage). Gère les
+// trous de numérotation (ex. LED 01 supprimé) → navigation/vignette dynamiques.
+const storageAssetVariants: Record<string, string[]> = {};
+const getFirstVariant = (baseCode: string): string => {
+  const list = storageAssetVariants[baseCode];
+  return (list && list.length > 0) ? list[0] : `${baseCode}A`;
+};
 
 const getAppOrigin = (): string => {
   // 1. Prioritize window.location.href if it is a valid HTTP/HTTPS URL
@@ -1822,7 +1829,7 @@ const SharedPreview = ({
             maskSize: 'cover',
             WebkitMaskPosition: 'center',
             maskPosition: 'center',
-            opacity: Math.min(1, 0.85 * colorIntensity),
+            opacity: Math.min(1, 0.5 * colorIntensity),
             // 'hard-light' recolore le néon même quand il est blanc/très lumineux
             // (contrairement à 'color' qui garde la luminosité → invisible sur du blanc).
             mixBlendMode: 'hard-light',
@@ -3394,11 +3401,14 @@ const EnvironmentScreen: React.FC<{
           <div className="grid grid-cols-2 gap-1.5">
             {currentVariants.map((v) => {
               const isSelected = variant?.startsWith(v.code);
+              const discovered = storageAssetVariants[v.code];
               const maxLetter = VARIANT_LIMITS[v.code] || 'A';
-              const currentLetter = isSelected ? (variant.slice(v.code.length) || 'A') : 'A';
-              const totalVariants = maxLetter.charCodeAt(0) - 'A'.charCodeAt(0) + 1;
-              const currentIndex = currentLetter.charCodeAt(0) - 'A'.charCodeAt(0) + 1;
-              const currentVariantCode = isSelected ? (variant || `${v.code}A`) : `${v.code}A`;
+              // Vignette = 1ʳᵉ variante RÉELLEMENT présente (pas forcément 'A').
+              const currentVariantCode = isSelected ? (variant || getFirstVariant(v.code)) : getFirstVariant(v.code);
+              const totalVariants = (discovered && discovered.length) ? discovered.length : (maxLetter.charCodeAt(0) - 'A'.charCodeAt(0) + 1);
+              const currentIndex = (discovered && isSelected)
+                ? (discovered.indexOf(variant) >= 0 ? discovered.indexOf(variant) + 1 : 1)
+                : ((isSelected ? (variant.slice(v.code.length) || 'A') : 'A').charCodeAt(0) - 'A'.charCodeAt(0) + 1);
 
               return (
                 <div
@@ -5502,6 +5512,11 @@ export default function App() {
 
 const getRandomVariant = (baseCode: string | null) => {
   if (!baseCode) return null;
+  // Priorité : piocher parmi les variantes réellement présentes (découvertes au crawl).
+  const discovered = storageAssetVariants[baseCode];
+  if (discovered && discovered.length > 0) {
+    return discovered[Math.floor(Math.random() * discovered.length)];
+  }
   const limitChar = VARIANT_LIMITS[baseCode];
   if (limitChar) {
     const limitCode = limitChar.toUpperCase().charCodeAt(0);
@@ -5798,6 +5813,14 @@ const MainApp = () => {
           storageAssetLimitsCache[baseCode] = maxLetter;
           console.log(`[Storage Index] Dynamically mapped ${baseCode} to limit ${maxLetter} (${maxNum} files)`);
         });
+
+        // Liste des variantes réellement présentes par style (gère les trous de num.)
+        Object.keys(storageAssetVariants).forEach(k => delete storageAssetVariants[k]);
+        Object.keys(storageAssetCache).forEach(vc => {
+          const base = vc.slice(0, -1);
+          (storageAssetVariants[base] = storageAssetVariants[base] || []).push(vc);
+        });
+        Object.keys(storageAssetVariants).forEach(b => storageAssetVariants[b].sort());
         
         if (isSubscribed) {
           setIsStorageIndexed(true);
@@ -6175,7 +6198,9 @@ const MainApp = () => {
           const dx = ((stateVal.imageTransform?.x || 0) / 100) * boxSize;
           const dy = ((stateVal.imageTransform?.y || 0) / 100) * boxSize;
           const centerX = 640 + dx;
-          const centerY = 640 + dy;
+          // Centre vertical abaissé de 640 → 720 (grille 1280) : le véhicule « pose » mieux
+          // sur le sol au lieu de flotter au centre.
+          const centerY = 720 + dy;
           
           context.translate(centerX, centerY);
           context.rotate(((stateVal.imageTransform?.rotate || 0) * Math.PI) / 180);
@@ -6939,12 +6964,22 @@ const processPreview = async (base64Composite: string) => {
 
     const baseCode = code;
     setState(prev => {
-      let nextVariant = `${baseCode}A`;
-      if (VARIANT_LIMITS[baseCode]) {
+      const variants = storageAssetVariants[baseCode];
+      let nextVariant: string;
+      if (variants && variants.length > 0) {
+        // Cyclage à travers les variantes RÉELLEMENT présentes (ignore les trous).
         if (prev.envVariant && prev.envVariant.startsWith(baseCode)) {
+          const idx = variants.indexOf(prev.envVariant);
+          nextVariant = variants[(idx + 1) % variants.length] || variants[0];
+        } else {
+          nextVariant = variants[0];
+        }
+      } else {
+        // Repli historique (avant que le crawl ait fini) : A..max contigu.
+        nextVariant = `${baseCode}A`;
+        if (VARIANT_LIMITS[baseCode] && prev.envVariant && prev.envVariant.startsWith(baseCode)) {
           const currentLetter = prev.envVariant.slice(baseCode.length) || 'A';
-          const maxLetter = VARIANT_LIMITS[baseCode];
-          const nextLetter = getNextLetter(currentLetter, maxLetter);
+          const nextLetter = getNextLetter(currentLetter, VARIANT_LIMITS[baseCode]);
           nextVariant = `${baseCode}${nextLetter}`;
         }
       }

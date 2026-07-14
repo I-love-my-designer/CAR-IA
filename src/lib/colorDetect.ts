@@ -88,8 +88,11 @@ export async function analyzeNeon(
     for (let i = 0; i < d.length; i += 4) {
       const { h, s, l } = rgbToHsl(d[i] / 255, d[i + 1] / 255, d[i + 2] / 255);
       let a = 0;
-      if (s >= 0.3 && l >= 0.18 && l <= 0.97 && hueDist(h, domHue) <= 30) {
-        a = Math.min(1, s * (0.5 + l)); // plus saturé/lumineux = plus opaque
+      // Néon = teinte proche de la dominante, un minimum saturé, et lumineux. On donne
+      // une alpha ÉLEVÉE (plancher 0.55), pilotée surtout par la luminosité → visible
+      // même sur un néon blanc/peu saturé.
+      if (s >= 0.2 && l >= 0.28 && l <= 0.98 && hueDist(h, domHue) <= 34) {
+        a = Math.min(1, 0.3 + (l - 0.28) * 0.7 + s * 0.3);
       }
       md[i] = 255; md[i + 1] = 255; md[i + 2] = 255; md[i + 3] = Math.round(a * 255);
     }
