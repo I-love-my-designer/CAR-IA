@@ -1829,7 +1829,7 @@ const SharedPreview = ({
             maskSize: 'cover',
             WebkitMaskPosition: 'center',
             maskPosition: 'center',
-            opacity: Math.min(1, 0.5 * colorIntensity),
+            opacity: Math.min(0.55, 0.3 * colorIntensity),
             // 'hard-light' recolore le néon même quand il est blanc/très lumineux
             // (contrairement à 'color' qui garde la luminosité → invisible sur du blanc).
             mixBlendMode: 'hard-light',
