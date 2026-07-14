@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './lib/authContext';
 import { GUEST_WATERMARK, createWatermarkedBlob } from './lib/watermark';
 import { analyzeNeon } from './lib/colorDetect';
 import BrandKitModal, { loadBrandKit, type BrandKit } from './components/BrandKitModal';
+import CaptureModal from './components/CaptureModal';
 import { 
   Camera, 
   ChevronRight, 
@@ -2527,9 +2528,11 @@ const UploadScreen: React.FC<{
   onNext: (img: string, originalImg: string | null, transform: any, isIsolated: boolean, bbox: BoundingBox) => void, 
   onBack: () => void,
   onHome: () => void,
-  isJumpingBack?: boolean
-}> = ({ 
-  image: initialImage, 
+  isJumpingBack?: boolean,
+  vehicleKind?: 'car' | 'utility' | 'bike' | null
+}> = ({
+  vehicleKind,
+  image: initialImage,
   originalImage: initialOriginalImage,
   transform: initialTransform, 
   isIsolated: initialIsIsolated, 
@@ -2545,6 +2548,12 @@ const UploadScreen: React.FC<{
   const [isIsolating, setIsIsolating] = useState(false);
   const [boundingBox, setBoundingBox] = useState<BoundingBox | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showCapture, setShowCapture] = useState(false);
+
+  // Photo prise via la caméra guidée → même traitement que l'import fichier.
+  const handleCaptured = (file: File) => {
+    handleUpload({ target: { files: [file] } } as unknown as React.ChangeEvent<HTMLInputElement>);
+  };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     let file = e.target.files?.[0];
@@ -2780,10 +2789,13 @@ const UploadScreen: React.FC<{
 
         <div className="flex flex-col gap-2">
           <div className="flex gap-2">
-            <Button variant="outline" className="flex-1 h-12 rounded-none border-white/10 text-[10px] uppercase tracking-widest relative">
+            <Button
+              variant="outline"
+              onClick={() => setShowCapture(true)}
+              className="flex-1 h-12 rounded-none border-white/10 text-[10px] uppercase tracking-widest"
+            >
               <Camera className="mr-2 w-4 h-4" />
-              {originalImage ? "Change photo" : "Take a photo"}
-              <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*" onChange={handleUpload} />
+              Photo guidée
             </Button>
 
             <Button 
@@ -2805,6 +2817,13 @@ const UploadScreen: React.FC<{
             <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*" onChange={handleUploadAlreadyCutout} />
           </Button>
         </div>
+
+        <CaptureModal
+          open={showCapture}
+          onClose={() => setShowCapture(false)}
+          onCapture={handleCaptured}
+          vehicleKind={vehicleKind}
+        />
 
         {isIsolated && isolatedImage && (
           <div className="space-y-2 pt-2">
@@ -7259,8 +7278,9 @@ const processPreview = async (base64Composite: string) => {
         )}
 
         {state.screen === 'upload' && (
-          <UploadScreen 
+          <UploadScreen
             key="upload"
+            vehicleKind={state.vehicleCategory}
             image={state.image}
             originalImage={state.originalImage}
             transform={state.imageTransform}
