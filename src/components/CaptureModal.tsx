@@ -22,6 +22,19 @@ const CaptureModal: React.FC<Props> = ({ open, onClose, onCapture, vehicleKind }
   const streamRef = useRef<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [isPortrait, setIsPortrait] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const check = () => setIsPortrait(window.innerHeight > window.innerWidth);
+    check();
+    window.addEventListener('resize', check);
+    window.addEventListener('orientationchange', check);
+    return () => {
+      window.removeEventListener('resize', check);
+      window.removeEventListener('orientationchange', check);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -92,9 +105,18 @@ const CaptureModal: React.FC<Props> = ({ open, onClose, onCapture, vehicleKind }
         <div className="absolute inset-x-0 top-0 bg-gradient-to-b from-black/70 to-transparent px-5 pb-8 pt-5 text-center">
           <p className="text-sm font-bold uppercase tracking-widest text-white">Placez le véhicule dans le gabarit</p>
           <p className="mt-1 text-[11px] leading-snug text-white/70">
-            Vue <strong className="text-white">3/4 avant</strong> · téléphone à <strong className="text-white">hauteur de taille</strong> · gardez l'horizon droit · le véhicule doit <strong className="text-white">remplir</strong> le cadre.
+            📱 Téléphone à l'<strong className="text-white">horizontale</strong> · vue <strong className="text-white">3/4 avant</strong> · à <strong className="text-white">hauteur de taille</strong> · horizon droit · le véhicule doit <strong className="text-white">remplir</strong> le cadre.
           </p>
         </div>
+
+        {/* Rappel de rotation si le téléphone est en portrait */}
+        {isPortrait && (
+          <div className="absolute left-1/2 top-[42%] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-black/75 px-5 py-4 text-center backdrop-blur">
+            <div className="mb-1 text-3xl">🔄📱</div>
+            <p className="text-sm font-bold text-white">Tournez le téléphone à l'horizontale</p>
+            <p className="mt-0.5 text-[11px] text-white/60">Format paysage pour cadrer le véhicule</p>
+          </div>
+        )}
 
         {/* Coins de cadrage + silhouette */}
         <svg className="absolute inset-0 h-full w-full" preserveAspectRatio="xMidYMid meet" viewBox="0 0 100 100">
