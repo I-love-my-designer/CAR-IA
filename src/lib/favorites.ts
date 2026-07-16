@@ -7,6 +7,8 @@ export interface FavItem {
 }
 
 export const MAX_FAVORITES = 10;
+/** Annonces générées épinglables (top-list de « Mes annonces »). */
+export const MAX_ANNONCE_FAVORITES = 5;
 const LS_KEY = 'pwa_favorites';
 
 /** Ne garde que les favoris réels (avec un envVariant), borné à MAX_FAVORITES. */
@@ -61,6 +63,32 @@ export async function saveFavorites(uid: string, favs: (FavItem | null)[]): Prom
     return true;
   } catch (e) {
     console.warn('[FAV] écriture échouée:', e);
+    return false;
+  }
+}
+
+/** IDs des annonces générées épinglées (même doc `favorites/{uid}`, champ `annonces`). */
+export async function loadAnnonceFavorites(uid: string): Promise<string[]> {
+  try {
+    const snap = await getDoc(doc(customDb, 'favorites', uid));
+    const arr = snap.exists() ? (snap.data() as any)?.annonces : null;
+    return Array.isArray(arr)
+      ? arr.filter((x) => typeof x === 'string' && x.length > 0).slice(0, MAX_ANNONCE_FAVORITES)
+      : [];
+  } catch (e) {
+    console.warn('[FAV] annonces lecture échouée:', e);
+    return [];
+  }
+}
+
+export async function saveAnnonceFavorites(uid: string, ids: string[]): Promise<boolean> {
+  try {
+    const clean = Array.from(new Set(ids.filter((x) => typeof x === 'string' && x.length > 0)))
+      .slice(0, MAX_ANNONCE_FAVORITES);
+    await setDoc(doc(customDb, 'favorites', uid), { annonces: clean }, { merge: true });
+    return true;
+  } catch (e) {
+    console.warn('[FAV] annonces écriture échouée:', e);
     return false;
   }
 }

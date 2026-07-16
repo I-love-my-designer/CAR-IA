@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { collection, query, where, limit, getDocs } from 'firebase/firestore';
 import { customDb } from '../lib/firebase';
 import { createWatermarkedBlob, fetchImageBlob, GUEST_WATERMARK } from '../lib/watermark';
+import { loadAnnonceFavorites, saveAnnonceFavorites, MAX_ANNONCE_FAVORITES } from '../lib/favorites';
 
 interface HistItem {
   id: string;
@@ -32,12 +33,15 @@ const HistoryModal: React.FC<Props> = ({ open, onClose, userId, isEntitled }) =>
   const [items, setItems] = useState<HistItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [favIds, setFavIds] = useState<string[]>([]);
+  const [limitMsg, setLimitMsg] = useState(false);
 
   useEffect(() => {
     if (!open || !userId) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
+      setLimitMsg(false);
       try {
         // where(userId) + limit, sans orderBy → pas d'index composite requis ; tri client.
         const q = query(
@@ -45,7 +49,7 @@ const HistoryModal: React.FC<Props> = ({ open, onClose, userId, isEntitled }) =>
           where('userId', '==', userId),
           limit(60),
         );
-        const snap = await getDocs(q);
+        const [snap, favs] = await Promise.all([getDocs(q), loadAnnonceFavorites(userId)]);
         const list: HistItem[] = [];
         snap.forEach((d) => {
           const x = d.data() as any;
@@ -53,7 +57,7 @@ const HistoryModal: React.FC<Props> = ({ open, onClose, userId, isEntitled }) =>
           if (imageUrl) list.push({ id: d.id, imageUrl, timestamp: x.timestamp || x.createdAt });
         });
         list.sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
-        if (!cancelled) setItems(list);
+        if (!cancelled) { setItems(list); setFavIds(favs); }
       } catch (e) {
         console.warn('[HISTORY] chargement échoué:', e);
         if (!cancelled) setItems([]);
@@ -65,6 +69,29 @@ const HistoryModal: React.FC<Props> = ({ open, onClose, userId, isEntitled }) =>
   }, [open, userId]);
 
   if (!open) return null;
+
+  const toggleFav = (id: string) => {
+    if (!userId) return;
+    const isFav = favIds.includes(id);
+    if (!isFav && favIds.length >= MAX_ANNONCE_FAVORITES) {
+      setLimitMsg(true);
+      setTimeout(() => setLimitMsg(false), 2500);
+      return;
+    }
+    const next = isFav ? favIds.filter((x) => x !== id) : [...favIds, id];
+    setFavIds(next);          // optimiste
+    saveAnnonceFavorites(userId, next);
+  };
+
+  // Favoris épinglés en tête (dans l'ordre où ils ont été ajoutés), puis le reste par date.
+  const sorted = [...items].sort((a, b) => {
+    const fa = favIds.indexOf(a.id);
+    const fb = favIds.indexOf(b.id);
+    if (fa !== -1 && fb !== -1) return fa - fb;
+    if (fa !== -1) return -1;
+    if (fb !== -1) return 1;
+    return 0;
+  });
 
   const handleDownload = async (item: HistItem) => {
     setBusyId(item.id);
@@ -88,9 +115,20 @@ const HistoryModal: React.FC<Props> = ({ open, onClose, userId, isEntitled }) =>
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
-          <h2 className="text-base font-bold">Mes annonces</h2>
+          <h2 className="text-base font-bold">
+            Mes annonces
+            {favIds.length > 0 && (
+              <span className="ml-2 text-xs font-normal text-amber-300/80">★ {favIds.length}/{MAX_ANNONCE_FAVORITES} épinglées</span>
+            )}
+          </h2>
           <button onClick={onClose} className="text-xl leading-none text-white/40 hover:text-white">×</button>
         </div>
+
+        {limitMsg && (
+          <div className="bg-amber-500/10 px-6 py-2 text-center text-[11px] text-amber-300">
+            Maximum {MAX_ANNONCE_FAVORITES} annonces épinglées. Retirez-en une d'abord.
+          </div>
+        )}
 
         <div className="min-h-[200px] flex-1 overflow-y-auto p-6">
           {loading && <p className="py-10 text-center text-sm text-white/40">Chargement…</p>}
@@ -105,8 +143,15 @@ const HistoryModal: React.FC<Props> = ({ open, onClose, userId, isEntitled }) =>
 
           {!loading && items.length > 0 && (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {items.map((item) => (
-                <div key={item.id} className="group relative overflow-hidden rounded-lg border border-white/10 bg-black">
+              {sorted.map((item) => {
+                const isFav = favIds.includes(item.id);
+                return (
+                <div
+                  key={item.id}
+                  className={`group relative overflow-hidden rounded-lg border bg-black ${
+                    isFav ? 'border-amber-300/60 ring-1 ring-amber-300/40' : 'border-white/10'
+                  }`}
+                >
                   <img
                     src={item.imageUrl}
                     alt="Création"
@@ -117,6 +162,18 @@ const HistoryModal: React.FC<Props> = ({ open, onClose, userId, isEntitled }) =>
                     onDragStart={!isEntitled ? (e) => e.preventDefault() : undefined}
                     onContextMenu={!isEntitled ? (e) => e.preventDefault() : undefined}
                   />
+                  {/* Étoile favori (max 5, épinglée en haut) */}
+                  <button
+                    onClick={() => toggleFav(item.id)}
+                    title={isFav ? 'Retirer des favoris' : 'Épingler en haut (max 5)'}
+                    className={`absolute left-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full text-sm backdrop-blur transition-colors ${
+                      isFav
+                        ? 'bg-amber-400/90 text-black'
+                        : 'bg-black/50 text-white/70 opacity-0 hover:bg-black/70 group-hover:opacity-100'
+                    }`}
+                  >
+                    {isFav ? '★' : '☆'}
+                  </button>
                   <button
                     onClick={() => handleDownload(item)}
                     disabled={busyId === item.id}
@@ -125,7 +182,8 @@ const HistoryModal: React.FC<Props> = ({ open, onClose, userId, isEntitled }) =>
                     {busyId === item.id ? '…' : 'Télécharger'}
                   </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
