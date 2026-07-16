@@ -88,7 +88,7 @@ const HistoryModal: React.FC<Props> = ({ open, onClose, userId, isEntitled }) =>
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
-          <h2 className="text-base font-bold">Mes créations</h2>
+          <h2 className="text-base font-bold">Mes annonces</h2>
           <button onClick={onClose} className="text-xl leading-none text-white/40 hover:text-white">×</button>
         </div>
 

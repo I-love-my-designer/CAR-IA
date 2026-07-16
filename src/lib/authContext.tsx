@@ -4,6 +4,7 @@ import { subscribeAuth, ensureGuest, isGuest, logout, type AuthUser } from './au
 import { customDb } from './firebase';
 import AuthModal from '../components/AuthModal';
 import HistoryModal from '../components/HistoryModal';
+import MonEspacePanel from '../components/MonEspacePanel';
 
 interface AuthCtx {
   user: AuthUser | null;
@@ -36,6 +37,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [modalOpen, setModalOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [brandKitOpen, setBrandKitOpen] = useState(false);
+  const [spaceOpen, setSpaceOpen] = useState(false);
   const [reason, setReason] = useState<string | undefined>(undefined);
   const pending = useRef<(() => void) | null>(null);
 
@@ -95,28 +97,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               Se connecter
             </button>
           ) : (
-            <div className="flex items-center gap-2 rounded-full border border-white/15 bg-black/50 px-3 py-1.5 text-xs text-white backdrop-blur">
-              <button
-                onClick={() => setHistoryOpen(true)}
-                className="font-medium text-white/80 hover:text-white"
-                title="Mes créations"
-              >
-                🖼️ Mes créations
-              </button>
-              <span className="text-white/20">·</span>
-              <button
-                onClick={() => setBrandKitOpen(true)}
-                className="font-medium text-white/80 hover:text-white"
-                title="Mon Brand Kit"
-              >
-                🎨 Brand Kit
-              </button>
-              <span className="text-white/20">·</span>
-              <span className="max-w-[120px] truncate text-white/50" title={user?.email || undefined}>
-                {user?.displayName || user?.email || 'Mon compte'}
+            <button
+              onClick={() => setSpaceOpen(true)}
+              className="flex items-center gap-2 rounded-full border border-white/15 bg-black/50 py-1 pl-1 pr-3 text-xs text-white backdrop-blur hover:bg-black/70"
+              title="Mon espace"
+            >
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold">
+                {(user?.displayName || user?.email || 'U').trim()[0]?.toUpperCase()}
               </span>
-              <button onClick={() => logout()} className="text-white/50 hover:text-white" title="Se déconnecter">⎋</button>
-            </div>
+              <span className="max-w-[110px] truncate text-white/70">
+                {user?.displayName || user?.email || 'Mon espace'}
+              </span>
+            </button>
           )}
         </div>
       )}
@@ -133,6 +125,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         onClose={() => setHistoryOpen(false)}
         userId={user?.uid ?? null}
         isEntitled={isEntitled}
+      />
+
+      <MonEspacePanel
+        open={spaceOpen}
+        onClose={() => setSpaceOpen(false)}
+        user={user}
+        plan={plan}
+        isEntitled={isEntitled}
+        onOpenAnnonces={() => { setSpaceOpen(false); setHistoryOpen(true); }}
+        onOpenFavoris={() => {}}
+        onOpenBrandKit={() => { setSpaceOpen(false); setBrandKitOpen(true); }}
+        onOpenAbonnement={() => setSpaceOpen(false)}
+        onLogout={() => { setSpaceOpen(false); logout(); }}
       />
     </Ctx.Provider>
   );
