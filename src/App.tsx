@@ -3635,7 +3635,7 @@ const CustomBrandDropdown: React.FC<CustomBrandDropdownProps> = ({
 
       {isOpen && (
         <div className={cn(
-          "absolute bottom-full mb-1 bg-[#808080] border border-white/10 shadow-2xl z-50 flex flex-col transition-all duration-200",
+          "absolute bottom-full mb-1 bg-zinc-950 border border-white/10 shadow-2xl z-50 flex flex-col transition-all duration-200",
           size === 'sm'
             ? (showSearchResults ? "right-0 w-[290px] h-auto max-h-[380px]" : "right-0 w-[245px] h-[245px]")
             : "left-0 w-full max-h-[245px]"
@@ -3659,13 +3659,13 @@ const CustomBrandDropdown: React.FC<CustomBrandDropdownProps> = ({
                         }}
                         className={cn(
                           "w-full px-2 py-1 flex items-center gap-3 text-left uppercase tracking-wide transition-colors cursor-pointer min-w-0 min-h-[68px] shrink-0",
-                          isSelected ? "bg-white/15 font-bold" : "hover:bg-white/10"
+                          isSelected ? "bg-white/10 text-white font-bold" : "text-white/70 hover:bg-white/5 hover:text-white"
                         )}
                       >
-                        <div className="w-[60px] h-[60px] flex items-center justify-center bg-black/45 p-1 border border-white/10 shrink-0">
+                        <div className="w-[60px] h-[60px] flex items-center justify-center bg-[#808080] p-1 border border-white/5 shrink-0">
                           <img src={logo.url} className="max-w-full max-h-full object-contain" referrerPolicy="no-referrer" />
                         </div>
-                        <span className="truncate flex-1 font-sans text-sm text-white">{getCleanBrandName(logo.name)}</span>
+                        <span className="truncate flex-1 font-sans text-sm">{getCleanBrandName(logo.name)}</span>
                         {isSelected && <Check className="w-3 h-3 text-white shrink-0" />}
                       </button>
                     );
