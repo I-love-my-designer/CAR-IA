@@ -1372,7 +1372,9 @@ const SharedPreview = ({
       
       {/* Vehicle and Accents Layer */}
       <div className="absolute top-1/2 left-0 w-full aspect-square -translate-y-1/2 flex items-center justify-center z-20 pointer-events-none">
-        <div className="relative w-3/4 h-3/4 pointer-events-auto">
+        {/* Véhicule abaissé pour coller à la génération IA : centre à 720/1280 (56,25%)
+            au lieu de 50%. Décalage = 6,25% du carré = 8,333% de la hauteur de cette boîte (h-3/4). */}
+        <div className="relative w-3/4 h-3/4 pointer-events-auto" style={{ transform: 'translateY(8.333%)' }}>
           {image && (
             <div className="w-full h-full relative z-10">
               {isIsolated && (
@@ -4225,7 +4227,7 @@ const BrandingLogoScreen: React.FC<{
               </div>
 
               {/* PREVIEW CARRE (Droite - Optimisé à 90px par 90px) */}
-              <div className="flex flex-col items-center justify-center bg-black/40 border border-white/10 w-[90px] h-[90px] shrink-0 relative">
+              <div className="flex flex-col items-center justify-center bg-[#808080] border border-white/10 w-[90px] h-[90px] shrink-0 relative">
                 {showLogo && customLogo ? (
                   <img src={customLogo} className="max-w-[85%] max-h-[85%] object-contain" referrerPolicy="no-referrer" />
                 ) : (
