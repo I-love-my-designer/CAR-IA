@@ -125,7 +125,7 @@ const HistoryModal: React.FC<Props> = ({ open, onClose, userId, isEntitled }) =>
         </div>
 
         {limitMsg && (
-          <div className="bg-amber-500/10 px-6 py-2 text-center text-[11px] text-amber-300">
+          <div className="bg-amber-500/15 px-6 py-2.5 text-center text-sm font-medium text-amber-200">
             Maximum {MAX_ANNONCE_FAVORITES} annonces épinglées. Retirez-en une d'abord.
           </div>
         )}

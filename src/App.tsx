@@ -3799,6 +3799,16 @@ const BrandingLogoScreen: React.FC<{
     }, 50);
   };
 
+  // Activer « Votre logo » : si un logo existe déjà (Brand Kit ou import précédent),
+  // on l'affiche directement SANS rouvrir la fenêtre d'import. On n'ouvre l'import
+  // que s'il n'y a rien à afficher (pas de Brand Kit / pas encore importé).
+  const selectVotreLogo = () => {
+    onShowLogo(true);
+    setLogoMode('votre_logo');
+    onCustomLogo(uploadedLogo);
+    if (!uploadedLogo) triggerFileInput();
+  };
+
   React.useEffect(() => {
     if (customLogo) {
       const isUrlInAllLogos = firebaseLogos.some(l => l.url === customLogo);
@@ -4163,17 +4173,13 @@ const BrandingLogoScreen: React.FC<{
 
                   <div className="flex items-center justify-between gap-1.5 w-full">
                     <div className="flex items-center gap-2">
-                      <button 
+                      <button
                         type="button"
                         onClick={() => {
-                          const act = !(showLogo && logoMode === 'votre_logo');
-                          if (act) {
-                            onShowLogo(true);
-                            setLogoMode('votre_logo');
-                            onCustomLogo(uploadedLogo);
-                            triggerFileInput();
-                          } else {
+                          if (showLogo && logoMode === 'votre_logo') {
                             onShowLogo(false);
+                          } else {
+                            selectVotreLogo();
                           }
                         }}
                         className={cn(
@@ -4183,17 +4189,12 @@ const BrandingLogoScreen: React.FC<{
                       >
                         {(showLogo && logoMode === 'votre_logo') && <Check className="w-3 h-3 stroke-[3]" />}
                       </button>
-                      <span 
+                      <span
                         className={cn(
                           "text-[9px] uppercase tracking-wider transition-colors cursor-pointer select-none",
                           (showLogo && logoMode === 'votre_logo') ? "text-white font-bold" : "text-zinc-400"
                         )}
-                        onClick={() => {
-                          onShowLogo(true);
-                          setLogoMode('votre_logo');
-                          onCustomLogo(uploadedLogo);
-                          triggerFileInput();
-                        }}
+                        onClick={selectVotreLogo}
                       >
                         Votre logo
                       </span>
