@@ -114,7 +114,7 @@ export const INITIAL_STATE: AppState = {
   showLogo: false,
   showText: false,
   returnToReview: false,
-  favorites: Array(6).fill(null),
+  favorites: Array(10).fill(null),
   currentJobId: null,
   currentJobStatus: null,
   currentJobResult: null,

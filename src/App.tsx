@@ -4,6 +4,10 @@ import { toPng } from 'html-to-image';
 import { AuthProvider, useAuth } from './lib/authContext';
 import { GUEST_WATERMARK, createWatermarkedBlob } from './lib/watermark';
 import { analyzeNeon } from './lib/colorDetect';
+import { STORAGE_PREFIX_MAP, letterToTwoDigits, getFirebaseStorageAssetUrl } from './lib/envAssets';
+import {
+  loadFavorites, saveFavorites, loadLocalFavorites, saveLocalFavorites, padFavorites,
+} from './lib/favorites';
 import BrandKitModal, { loadBrandKit, type BrandKit } from './components/BrandKitModal';
 import CaptureModal from './components/CaptureModal';
 import { 
@@ -235,57 +239,8 @@ const ZERO_BYTE_FALLBACKS: Record<string, string> = {
 };
 
 
-const STORAGE_PREFIX_MAP: Record<string, string> = {
-  // 1. URBAN (07A)
-  '07A01': 'CITY',
-  '07A02': 'SPORT',
-  '07A03': 'INDUS',
-  '07A04': 'PARKING',
-
-  // 2. NATURE (07B)
-  '07B01': 'DESERT',
-  '07B02': 'FOREST',
-  '07B03': 'MONTAGNE',
-  '07B04': 'SEASIDE',
-
-  // 3. DESIGN (07C)
-  '07C01': 'OUTSIDE',
-  '07C02': 'STUDIO',
-  '07C03': 'CONCRETE',
-  '07C04': 'LED',
-
-  // 4. MINIMAL (07D)
-  '07D01': 'LANDSCAPE',
-  '07D02': 'ARCHI',
-  '07D03': 'MTX',
-  '07D04': 'VGX',
-};
-
-const letterToTwoDigits = (letter: string): string => {
-  if (!letter || letter.length !== 1) return '01';
-  const code = letter.toUpperCase().charCodeAt(0) - 64; // A = 1, B = 2, C = 3...
-  if (code < 1 || code > 26) return '01';
-  return code < 10 ? `0${code}` : `${code}`;
-};
-
-const getFirebaseStorageAssetUrl = (effectiveCode: string): string | null => {
-  if (!effectiveCode || effectiveCode.length < 5 || !effectiveCode.startsWith('07')) {
-    return null;
-  }
-  const baseCode = effectiveCode.substring(0, 5); // e.g. "07A01"
-  const prefix = STORAGE_PREFIX_MAP[baseCode];
-  if (!prefix) return null;
-
-  const letter = effectiveCode.substring(5) || 'A';
-  const indexStr = letterToTwoDigits(letter); // e.g. "01"
-  const filename = `${prefix} ${indexStr}.jpg`;
-
-  // Public Firebase Storage URL format.
-  // Les fonds sont rangés par style : ENVIRONMENTS/{STYLE}/{STYLE NN}.jpg
-  const bucketName = "gen-lang-client-0870404092.firebasestorage.app";
-  const encodedPath = encodeURIComponent(`ENVIRONMENTS/${prefix}/${filename}`);
-  return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodedPath}?alt=media`;
-};
+// STORAGE_PREFIX_MAP + letterToTwoDigits + getFirebaseStorageAssetUrl vivent désormais
+// dans lib/envAssets.ts (source de vérité unique, partagée avec FavorisModal).
 
 const getAssetUrl = (code: string) => {
   if (!code) return '';
@@ -3292,8 +3247,11 @@ const EnvironmentScreen: React.FC<{
   onUpdateFavorites: (favorites: ({ envCategory: string | null; envVariant: string | null } | null)[]) => void
 }> = ({ category, onCategory, variant, onVariant, onNext, onBack, onHome, isJumpingBack, previewProps, favorites, onUpdateFavorites }) => {
   const [activeMenu, setActiveMenu] = useState<number | null>(null);
+  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
   const longPressTimer = useRef<any>(null);
   const isLongPress = useRef(false);
+
+  const closeMenu = () => { setActiveMenu(null); setConfirmDeleteIdx(null); };
 
   // Preload images for better responsiveness
   useEffect(() => {
@@ -3368,14 +3326,14 @@ const EnvironmentScreen: React.FC<{
     const newFavs = [...favorites];
     newFavs[idx] = null;
     onUpdateFavorites(newFavs);
-    setActiveMenu(null);
+    closeMenu();
   };
 
   const replaceFavorite = (idx: number) => {
     const newFavs = [...favorites];
     newFavs[idx] = { envCategory: category, envVariant: variant };
     onUpdateFavorites(newFavs);
-    setActiveMenu(null);
+    closeMenu();
   };
 
   const currentVariants = VARIANTS[category || 'urban'] || VARIANTS.urban;
@@ -3474,8 +3432,8 @@ const EnvironmentScreen: React.FC<{
             })}
           </div>
 
-          {/* Row of favorites presets (6 squares) */}
-          <div className="grid grid-cols-6 gap-1 pb-2 relative">
+          {/* Favoris (10 emplacements, 2 rangées) */}
+          <div className="grid grid-cols-5 gap-1 pb-2 relative">
             {favorites.map((fav, idx) => (
               <div key={idx} className="relative">
                 <button 
@@ -3507,20 +3465,29 @@ const EnvironmentScreen: React.FC<{
                 {/* Long Press Menu Overlay */}
                 {activeMenu === idx && (
                   <>
-                    <div className="fixed inset-0 z-40" onClick={() => setActiveMenu(null)} />
-                    <div className="absolute bottom-full left-0 mb-1 z-50 bg-zinc-900 border border-white/10 shadow-xl py-1 min-w-[100px]">
-                      <button 
+                    <div className="fixed inset-0 z-40" onClick={closeMenu} />
+                    <div className="absolute bottom-full left-0 mb-1 z-50 bg-zinc-900 border border-white/10 shadow-xl py-1 min-w-[110px]">
+                      <button
                         onClick={() => replaceFavorite(idx)}
                         className="w-full px-3 py-1.5 text-left text-[9px] uppercase font-bold tracking-widest text-white/70 active:text-white active:bg-white/5 transition-colors"
                       >
-                        Replace
+                        Remplacer
                       </button>
-                      <button 
-                        onClick={() => deleteFavorite(idx)}
-                        className="w-full px-3 py-1.5 text-left text-[9px] uppercase font-bold tracking-widest text-red-400 active:text-red-300 active:bg-white/5 transition-colors"
-                      >
-                        Delete
-                      </button>
+                      {confirmDeleteIdx === idx ? (
+                        <button
+                          onClick={() => deleteFavorite(idx)}
+                          className="w-full px-3 py-1.5 text-left text-[9px] uppercase font-bold tracking-widest text-red-400 bg-red-500/10 active:text-red-300 transition-colors"
+                        >
+                          Confirmer ✕
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDeleteIdx(idx)}
+                          className="w-full px-3 py-1.5 text-left text-[9px] uppercase font-bold tracking-widest text-red-400 active:text-red-300 active:bg-white/5 transition-colors"
+                        >
+                          Supprimer
+                        </button>
+                      )}
                     </div>
                   </>
                 )}
@@ -5563,9 +5530,18 @@ const MainApp = () => {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const { user: authUser, isGuest: authGuest, brandKitOpen, closeBrandKit } = useAuth();
   const brandKitAppliedRef = useRef(false);
+  // Couleur de marque « demandée » : un hex valide et différent du blanc par défaut.
+  // Le blanc (#ffffff) = valeur par défaut du kit → considéré « non défini » (sinon on
+  // écraserait toujours la teinte du néon par du blanc).
+  const isBrandColorSet = (c?: string | null) =>
+    !!c && /^#[0-9a-f]{6}$/i.test(c) && c.toLowerCase() !== '#ffffff';
+  // Mémorise la couleur de marque pour qu'elle prime sur l'auto-détection du néon
+  // lors de la sélection d'un fond « Color & Light ».
+  const brandKitColorRef = useRef<string | null>(null);
 
   // Applique un Brand Kit (logo + couleur + slogan) à l'état de génération courant.
   const applyBrandKit = (kit: BrandKit) => {
+    if (isBrandColorSet(kit.brandColor)) brandKitColorRef.current = kit.brandColor!;
     setState((prev) => ({
       ...prev,
       customLogo: kit.logoUrl ?? prev.customLogo,
@@ -5585,7 +5561,10 @@ const MainApp = () => {
     brandKitAppliedRef.current = true;
     (async () => {
       const kit = await loadBrandKit(uid);
-      if (!kit || (!kit.logoUrl && !kit.slogan)) return;
+      if (!kit) return;
+      // La couleur de marque est mémorisée même si l'utilisateur n'a ni logo ni slogan.
+      if (isBrandColorSet(kit.brandColor)) brandKitColorRef.current = kit.brandColor!;
+      if (!kit.logoUrl && !kit.slogan) return;
       setState((prev) => {
         if (prev.customLogo || prev.logoText) return prev; // déjà renseigné → on ne force pas
         return {
@@ -5600,6 +5579,46 @@ const MainApp = () => {
       });
     })();
   }, [authUser, authGuest]);
+
+  // --- Favoris (10 max) : cache local instantané + synchro Firestore par compte ---
+  // 1) Au montage : hydrate depuis le cache local (marche aussi pour les invités).
+  useEffect(() => {
+    const local = loadLocalFavorites();
+    if (local.length) setState((prev) => ({ ...prev, favorites: padFavorites(local) }));
+  }, []);
+  // 2) À la connexion : les favoris du compte font autorité (cross-device / « Mes favoris »).
+  useEffect(() => {
+    const uid = authUser?.uid;
+    if (!uid || authGuest) return;
+    (async () => {
+      const remote = await loadFavorites(uid);
+      if (remote.length) {
+        saveLocalFavorites(remote);
+        setState((prev) => ({ ...prev, favorites: padFavorites(remote) }));
+      }
+    })();
+  }, [authUser, authGuest]);
+  // Mise à jour d'un favori : état + cache local + Firestore (si connecté).
+  const updateFavorites = (favs: (typeof INITIAL_STATE.favorites)) => {
+    setState((prev) => ({ ...prev, favorites: favs }));
+    saveLocalFavorites(favs);
+    if (authUser?.uid && !authGuest) saveFavorites(authUser.uid, favs);
+  };
+  // Retour accueil sans perdre les favoris (INITIAL_STATE les remettrait à vide).
+  const resetHome = () => setState((prev) => ({ ...INITIAL_STATE, favorites: prev.favorites }));
+  // « Mon espace › Mes favoris » vit dans un autre arbre React (AuthProvider) : quand il
+  // supprime un favori, il émet cet évènement pour garder le sélecteur synchronisé.
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const items = (e as CustomEvent).detail as (typeof INITIAL_STATE.favorites);
+      if (!Array.isArray(items)) return;
+      saveLocalFavorites(items);
+      setState((prev) => ({ ...prev, favorites: padFavorites(items) }));
+    };
+    window.addEventListener('carai:favoris-changed', onChanged as EventListener);
+    return () => window.removeEventListener('carai:favoris-changed', onChanged as EventListener);
+  }, []);
+
   const lastAutoFittedBlob = useRef<{ image: string | null; bbox: any }>({ image: null, bbox: null });
   const [isStorageIndexed, setIsStorageIndexed] = useState(false);
   const [brandingPresets, setBrandingPresets] = useState<Record<string, any>>(() => {
@@ -5645,9 +5664,15 @@ const MainApp = () => {
           if (bgUrl) {
             const res = await analyzeNeon(bgUrl, (u) => resolveApiUrl(`/api/proxy?url=${encodeURIComponent(u)}`));
             if (res && !cancelled) {
-              setState(prev => ({ ...prev, colorTheme: res.hex }));
+              // Si l'utilisateur a une couleur de marque, elle prime : le néon prend
+              // la couleur du Brand Kit. Sinon on part de la teinte détectée du néon.
+              const startColor = brandKitColorRef.current || res.hex;
+              setState(prev => ({ ...prev, colorTheme: startColor }));
               setNeonMask(res.mask);
-              console.log(`[Couleur] Néon détecté sur '${imageId}' : ${res.hex}`);
+              console.log(
+                `[Couleur] Fond '${imageId}' : néon détecté ${res.hex}` +
+                (brandKitColorRef.current ? ` → couleur de marque appliquée ${brandKitColorRef.current}` : ''),
+              );
             }
           }
         } else if (!cancelled) {
@@ -7234,7 +7259,7 @@ const processPreview = async (base64Composite: string) => {
             onSelect={(id) => setState(s => ({ ...s, shootingCondition: id }))}
             onBack={() => back('home')}
             onNext={() => next('vehicle_category')}
-            onHome={() => setState(INITIAL_STATE)}
+            onHome={() => resetHome()}
             isJumpingBack={state.isJumpingBack}
           />
         )}
@@ -7246,7 +7271,7 @@ const processPreview = async (base64Composite: string) => {
             onSelect={(id) => setState(s => ({ ...s, vehicleCategory: id }))}
             onBack={() => back('shooting_conditions')}
             onNext={() => next('vehicle_selection')}
-            onHome={() => setState(INITIAL_STATE)}
+            onHome={() => resetHome()}
             isJumpingBack={state.isJumpingBack}
           />
         )}
@@ -7259,7 +7284,7 @@ const processPreview = async (base64Composite: string) => {
             onSelect={(id) => setState(s => ({ ...s, vehicleType: id }))}
             onBack={() => back('vehicle_category')}
             onNext={() => next('ad_style')}
-            onHome={() => setState(INITIAL_STATE)}
+            onHome={() => resetHome()}
             isJumpingBack={state.isJumpingBack}
           />
         )}
@@ -7272,7 +7297,7 @@ const processPreview = async (base64Composite: string) => {
             onSelect={(id) => setState(s => ({ ...s, adStyle: id }))}
             onBack={() => back('vehicle_selection')}
             onNext={() => next('upload')}
-            onHome={() => setState(INITIAL_STATE)}
+            onHome={() => resetHome()}
             isJumpingBack={state.isJumpingBack}
           />
         )}
@@ -7302,7 +7327,7 @@ const processPreview = async (base64Composite: string) => {
                 };
               });
             }} 
-            onHome={() => setState(INITIAL_STATE)}
+            onHome={() => resetHome()}
             isJumpingBack={state.isJumpingBack}
           />
         )}
@@ -7324,11 +7349,11 @@ const processPreview = async (base64Composite: string) => {
                 return nextState;
               });
             }}
-            onHome={() => setState(INITIAL_STATE)}
+            onHome={() => resetHome()}
             isJumpingBack={state.isJumpingBack}
             previewProps={previewProps}
             favorites={state.favorites}
-            onUpdateFavorites={(favs) => setState(s => ({ ...s, favorites: favs }))}
+            onUpdateFavorites={updateFavorites}
           />
         )}
 
@@ -7355,7 +7380,7 @@ const processPreview = async (base64Composite: string) => {
             onPosH={(pos) => setState(s => ({ ...s, logoPositionH: pos }))}
             onBack={() => back('environment_category')}
             onNext={() => next('color_light')}
-            onHome={() => setState(INITIAL_STATE)}
+            onHome={() => resetHome()}
             isJumpingBack={state.isJumpingBack}
             previewProps={previewProps}
           />
@@ -7370,7 +7395,7 @@ const processPreview = async (base64Composite: string) => {
             onIntensityChange={(v) => setState(s => ({ ...s, colorIntensity: v }))}
             onBack={() => back('branding_logo')}
             onNext={() => next('live_preview')}
-            onHome={() => setState(INITIAL_STATE)}
+            onHome={() => resetHome()}
             isJumpingBack={state.isJumpingBack}
             previewProps={previewProps}
           />
@@ -7381,7 +7406,7 @@ const processPreview = async (base64Composite: string) => {
             key="preview"
             onBack={() => back('color_light')}
             onNext={handleStartCompositingJob}
-            onHome={() => setState(INITIAL_STATE)}
+            onHome={() => resetHome()}
             onJump={(screen) => setState(s => {
               const baseState = { ...s, screen, isJumpingBack: true };
               if (screen === 'upload' && s.image && s.boundingBox) {
@@ -7409,7 +7434,7 @@ const processPreview = async (base64Composite: string) => {
         {state.screen === 'result' && (
           <ResultScreen 
             key="result" 
-            onReset={() => setState(INITIAL_STATE)} 
+            onReset={() => resetHome()} 
             onEdit={() => setState(s => ({ ...s, screen: 'live_preview', isJumpingBack: true }))}
             onChangeVehicle={() => setState(s => ({ ...s, screen: 'upload', returnToReview: true, isJumpingBack: true }))}
             previewProps={previewProps}

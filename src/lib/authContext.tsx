@@ -4,6 +4,7 @@ import { subscribeAuth, ensureGuest, isGuest, logout, type AuthUser } from './au
 import { customDb } from './firebase';
 import AuthModal from '../components/AuthModal';
 import HistoryModal from '../components/HistoryModal';
+import FavorisModal from '../components/FavorisModal';
 import MonEspacePanel from '../components/MonEspacePanel';
 
 interface AuthCtx {
@@ -36,6 +37,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [ready, setReady] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [favorisOpen, setFavorisOpen] = useState(false);
   const [brandKitOpen, setBrandKitOpen] = useState(false);
   const [spaceOpen, setSpaceOpen] = useState(false);
   const [reason, setReason] = useState<string | undefined>(undefined);
@@ -127,6 +129,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isEntitled={isEntitled}
       />
 
+      <FavorisModal
+        open={favorisOpen}
+        onClose={() => setFavorisOpen(false)}
+        userId={user?.uid ?? null}
+      />
+
       <MonEspacePanel
         open={spaceOpen}
         onClose={() => setSpaceOpen(false)}
@@ -134,7 +142,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         plan={plan}
         isEntitled={isEntitled}
         onOpenAnnonces={() => { setSpaceOpen(false); setHistoryOpen(true); }}
-        onOpenFavoris={() => {}}
+        onOpenFavoris={() => { setSpaceOpen(false); setFavorisOpen(true); }}
         onOpenBrandKit={() => { setSpaceOpen(false); setBrandKitOpen(true); }}
         onOpenAbonnement={() => setSpaceOpen(false)}
         onLogout={() => { setSpaceOpen(false); logout(); }}

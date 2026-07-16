@@ -77,13 +77,7 @@ const MonEspacePanel: React.FC<Props> = ({
         {/* Entrées */}
         <nav className="flex-1 overflow-y-auto py-2">
           <Row icon="🖼️" label="Mes annonces" onClick={onOpenAnnonces} />
-          <Row
-            icon="⭐"
-            label="Mes favoris"
-            onClick={onOpenFavoris}
-            disabled
-            right={<span className="rounded-full bg-white/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white/50">Bientôt</span>}
-          />
+          <Row icon="⭐" label="Mes favoris" onClick={onOpenFavoris} />
           <Row icon="🎨" label="Brand Kit" onClick={onOpenBrandKit} />
           <Row
             icon="💳"
