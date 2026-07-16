@@ -3637,7 +3637,7 @@ const CustomBrandDropdown: React.FC<CustomBrandDropdownProps> = ({
         <div className={cn(
           "absolute bottom-full mb-1 bg-zinc-950 border border-white/10 shadow-2xl z-50 flex flex-col transition-all duration-200",
           size === 'sm'
-            ? (showSearchResults ? "right-0 w-[290px] h-auto max-h-[380px]" : "right-0 w-[245px] h-[245px]")
+            ? (showSearchResults ? "right-0 w-[290px] h-auto max-h-[470px]" : "right-0 w-[245px] h-[245px]")
             : "left-0 w-full max-h-[245px]"
         )}>
           {showSearchResults ? (
@@ -3646,7 +3646,7 @@ const CustomBrandDropdown: React.FC<CustomBrandDropdownProps> = ({
                 Résultats de recherche ({filteredLogos.length})
               </div>
               {filteredLogos.length > 0 ? (
-                <div className="flex flex-col gap-0 overflow-y-auto max-h-[320px] pr-0.5">
+                <div className="flex flex-col gap-0 overflow-y-auto max-h-[408px] pr-0.5">
                   {filteredLogos.map(logo => {
                     const isSelected = selectedLogoUrl === logo.url;
                     return (
