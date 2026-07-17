@@ -4838,8 +4838,46 @@ const LivePreviewScreen: React.FC<{
   );
 };
 
-const GenerationScreen: React.FC<{ 
-  onComplete: () => void; 
+// Fausses phrases de chargement (clin d'œil « préparation du véhicule ») affichées
+// pendant la génération, pour faire patienter avec le sourire.
+const FUNNY_LOADING_PHRASES = [
+  'Lavage des jantes',
+  'Regonflage des pneus',
+  'Retrait des moustiques sur le pare-chocs',
+  'Lustrage de la carrosserie',
+  'Aspiration des miettes sous les sièges',
+  'Chasse aux traces de doigts sur les vitres',
+  'Réglage des rétroviseurs au millimètre',
+  'Application du petit sapin qui sent bon',
+  'Cirage du capot',
+  'Alignement parfait du logo',
+  'Dépoussiérage du tableau de bord',
+  'Nettoyage des insectes sur le pare-brise',
+  'Repassage des tapis de sol',
+  'Négociation du prix avec l\'IA',
+  'Gonflage de l\'ego du commercial',
+  'Vérification de la pression des pneus',
+  'Réglage des phares pour la photo',
+  'Déroulage du tapis rouge',
+  'Allumage des néons du studio',
+  'Recherche du meilleur angle',
+  'Chauffe du moteur (juste pour la pose)',
+  'Retouche de la peinture métallisée',
+  'Positionnement du véhicule sur le sol',
+  'Suppression des reflets indésirables',
+  'Application de la charte de la concession',
+  'Séchage sans aucune trace',
+  'Dernier coup de chiffon',
+  'Ajustement de la lumière',
+  'Ouverture des portières pour l\'effet waouh',
+  'Mise en scène digne d\'un salon auto',
+  'Polissage des chromes',
+  'Vérification du niveau de style',
+];
+const FUNNY_LOADING_EMOJIS = ['🧽', '🔧', '🚗', '✨', '🪣', '💨', '🧴'];
+
+const GenerationScreen: React.FC<{
+  onComplete: () => void;
   onCancel: () => void;
   previewProps: any;
   currentJobStatus: 'pending' | 'processing' | 'completed' | 'error' | null;
@@ -4849,6 +4887,16 @@ const GenerationScreen: React.FC<{
 }> = ({ onComplete, onCancel, previewProps, currentJobStatus, currentJobId, currentJobError, onSimulateLocal }) => {
   const [localProgress, setLocalProgress] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [funnyIdx, setFunnyIdx] = useState(() => Math.floor(Math.random() * FUNNY_LOADING_PHRASES.length));
+
+  // Rotation des fausses phrases de chargement tant que la génération est en cours.
+  useEffect(() => {
+    if (currentJobStatus === 'error' || currentJobStatus === 'completed') return;
+    const id = setInterval(() => {
+      setFunnyIdx((i) => (i + 1) % FUNNY_LOADING_PHRASES.length);
+    }, 2200);
+    return () => clearInterval(id);
+  }, [currentJobStatus]);
 
   const handleCopyConfig = () => {
     const configToCopy = {
@@ -4930,7 +4978,7 @@ const GenerationScreen: React.FC<{
           </div>
           
           <div className="w-full h-1 bg-white/10 rounded-none overflow-hidden">
-            <motion.div 
+            <motion.div
               className={cn(
                 "h-full transition-all duration-300",
                 currentJobStatus === 'error' ? "bg-red-500" : "bg-white"
@@ -4939,6 +4987,20 @@ const GenerationScreen: React.FC<{
               animate={{ width: `${localProgress}%` }}
             />
           </div>
+
+          {/* Fausses phrases de chargement (patience avec le sourire) */}
+          {currentJobStatus !== 'error' && currentJobStatus !== 'completed' && (
+            <motion.div
+              key={funnyIdx}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35 }}
+              className="flex items-center gap-2 text-[11px] tracking-wide text-white/70"
+            >
+              <span>{FUNNY_LOADING_EMOJIS[funnyIdx % FUNNY_LOADING_EMOJIS.length]}</span>
+              <span>{FUNNY_LOADING_PHRASES[funnyIdx]}…</span>
+            </motion.div>
+          )}
 
           {currentJobId && (
             <div className="pt-2 space-y-3 border-t border-white/5 text-[9px] text-white/50 tracking-wide">
