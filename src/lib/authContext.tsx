@@ -20,6 +20,10 @@ interface AuthCtx {
   brandKitOpen: boolean;
   openBrandKit: () => void;
   closeBrandKit: () => void;
+  /** Studio CUSTOM open state — rendered by MainApp (needs API url + brand logo + storage). */
+  customOpen: boolean;
+  openCustom: () => void;
+  closeCustom: () => void;
   logout: () => Promise<void>;
 }
 
@@ -39,6 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [historyOpen, setHistoryOpen] = useState(false);
   const [favorisOpen, setFavorisOpen] = useState(false);
   const [brandKitOpen, setBrandKitOpen] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
   const [spaceOpen, setSpaceOpen] = useState(false);
   const [reason, setReason] = useState<string | undefined>(undefined);
   const pending = useRef<(() => void) | null>(null);
@@ -85,7 +90,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <Ctx.Provider value={{ user, isGuest: guest, isEntitled, plan, requireAccount, openAuth, brandKitOpen, openBrandKit: () => setBrandKitOpen(true), closeBrandKit: () => setBrandKitOpen(false), logout }}>
+    <Ctx.Provider value={{ user, isGuest: guest, isEntitled, plan, requireAccount, openAuth, brandKitOpen, openBrandKit: () => setBrandKitOpen(true), closeBrandKit: () => setBrandKitOpen(false), customOpen, openCustom: () => setCustomOpen(true), closeCustom: () => setCustomOpen(false), logout }}>
       {children}
 
       {/* Floating account chip — available on every screen, non-invasive */}
@@ -143,6 +148,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isEntitled={isEntitled}
         onOpenAnnonces={() => { setSpaceOpen(false); setHistoryOpen(true); }}
         onOpenFavoris={() => { setSpaceOpen(false); setFavorisOpen(true); }}
+        onOpenCustom={() => { setSpaceOpen(false); setCustomOpen(true); }}
         onOpenBrandKit={() => { setSpaceOpen(false); setBrandKitOpen(true); }}
         onOpenAbonnement={() => setSpaceOpen(false)}
         onLogout={() => { setSpaceOpen(false); logout(); }}

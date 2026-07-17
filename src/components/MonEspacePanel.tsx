@@ -9,6 +9,7 @@ interface Props {
   isEntitled: boolean;
   onOpenAnnonces: () => void;
   onOpenFavoris: () => void;
+  onOpenCustom: () => void;
   onOpenBrandKit: () => void;
   onOpenAbonnement: () => void;
   onLogout: () => void;
@@ -36,7 +37,7 @@ const Row: React.FC<{
 
 const MonEspacePanel: React.FC<Props> = ({
   open, onClose, user, plan, isEntitled,
-  onOpenAnnonces, onOpenFavoris, onOpenBrandKit, onOpenAbonnement, onLogout,
+  onOpenAnnonces, onOpenFavoris, onOpenCustom, onOpenBrandKit, onOpenAbonnement, onLogout,
 }) => {
   const name = user?.displayName || user?.email || 'Mon compte';
   const initial = (name.trim()[0] || 'U').toUpperCase();
@@ -78,6 +79,12 @@ const MonEspacePanel: React.FC<Props> = ({
         <nav className="flex-1 overflow-y-auto py-2">
           <Row icon="🖼️" label="Mes annonces" onClick={onOpenAnnonces} />
           <Row icon="⭐" label="Mes favoris" onClick={onOpenFavoris} />
+          <Row
+            icon="🪄"
+            label="Custom"
+            onClick={onOpenCustom}
+            right={<span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">Fond IA</span>}
+          />
           <Row icon="🎨" label="Brand Kit" onClick={onOpenBrandKit} />
           <Row
             icon="💳"

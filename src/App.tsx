@@ -9,6 +9,7 @@ import {
   loadFavorites, saveFavorites, loadLocalFavorites, saveLocalFavorites, padFavorites,
 } from './lib/favorites';
 import BrandKitModal, { loadBrandKit, type BrandKit } from './components/BrandKitModal';
+import CustomStudioModal from './components/CustomStudioModal';
 import CaptureModal from './components/CaptureModal';
 import { 
   Camera, 
@@ -5531,8 +5532,10 @@ const MainApp = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [state, setState] = useState<AppState>(INITIAL_STATE);
-  const { user: authUser, isGuest: authGuest, brandKitOpen, closeBrandKit } = useAuth();
+  const { user: authUser, isGuest: authGuest, brandKitOpen, closeBrandKit, customOpen, closeCustom } = useAuth();
   const brandKitAppliedRef = useRef(false);
+  // Logo du Brand Kit mémorisé (affiché par défaut dans le studio CUSTOM).
+  const brandKitLogoRef = useRef<string | null>(null);
   // Couleur de marque « demandée » : un hex valide et différent du blanc par défaut.
   // Le blanc (#ffffff) = valeur par défaut du kit → considéré « non défini » (sinon on
   // écraserait toujours la teinte du néon par du blanc).
@@ -5545,6 +5548,7 @@ const MainApp = () => {
   // Applique un Brand Kit (logo + couleur + slogan) à l'état de génération courant.
   const applyBrandKit = (kit: BrandKit) => {
     if (isBrandColorSet(kit.brandColor)) brandKitColorRef.current = kit.brandColor!;
+    if (kit.logoUrl) brandKitLogoRef.current = kit.logoUrl;
     setState((prev) => ({
       ...prev,
       customLogo: kit.logoUrl ?? prev.customLogo,
@@ -5565,8 +5569,9 @@ const MainApp = () => {
     (async () => {
       const kit = await loadBrandKit(uid);
       if (!kit) return;
-      // La couleur de marque est mémorisée même si l'utilisateur n'a ni logo ni slogan.
+      // Couleur + logo de marque mémorisés même sans logo/slogan appliqué à l'état.
       if (isBrandColorSet(kit.brandColor)) brandKitColorRef.current = kit.brandColor!;
+      if (kit.logoUrl) brandKitLogoRef.current = kit.logoUrl;
       if (!kit.logoUrl && !kit.slogan) return;
       setState((prev) => {
         if (prev.customLogo || prev.logoText) return prev; // déjà renseigné → on ne force pas
@@ -7450,6 +7455,14 @@ const processPreview = async (base64Composite: string) => {
         onClose={closeBrandKit}
         userId={authUser?.uid ?? null}
         onApply={applyBrandKit}
+      />
+
+      <CustomStudioModal
+        open={customOpen}
+        onClose={closeCustom}
+        brandLogoUrl={brandKitLogoRef.current || state.customLogo || null}
+        userId={authUser?.uid ?? null}
+        apiUrl={resolveApiUrl('/api/gemini/generate-background')}
       />
     </div>
   );
