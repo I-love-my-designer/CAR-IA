@@ -11,6 +11,8 @@ import {
 import BrandKitModal, { loadBrandKit, type BrandKit } from './components/BrandKitModal';
 import CustomStudioModal from './components/CustomStudioModal';
 import CaptureModal from './components/CaptureModal';
+import VirtualKeyboard from './components/VirtualKeyboard';
+import { listSavedCustomBackgrounds, type CustomAsset } from './lib/customStudio';
 import { 
   Camera, 
   ChevronRight, 
@@ -61,6 +63,16 @@ import { db, customDb, oldDb, oldApp, storage, handleFirestoreError, OperationTy
 import { ref, listAll, getDownloadURL, uploadString, uploadBytes } from 'firebase/storage';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
+
+// === Mode "2 MODELS" (test admin) =========================================
+// Génère 2 images en parallèle pour comparer les rendus : le modèle par défaut
+// (Gemini 2.5 Flash) et le modèle qualité max (Gemini 3 Pro). Réservé aux
+// comptes Google listés ci-dessous (fonction de test / comparaison interne).
+const COMPARE_MODEL_FLASH = 'gemini-2.5-flash-image';
+const COMPARE_MODEL_PRO = 'gemini-3-pro-image-preview';
+const ADMIN_EMAILS = ['benoitplantade@gmail.com'];
+const isAdminEmail = (email?: string | null): boolean =>
+  !!email && ADMIN_EMAILS.includes(email.trim().toLowerCase());
 
 const storageAssetCache: Record<string, string> = {};
 const storageAssetLimitsCache: Record<string, string> = {};
@@ -2465,6 +2477,12 @@ const normalizeJobImageValue = (
 };
 
 const resolveImageAForFirestore = (variantCode: string): string => {
+  // Fond « PERSO » (généré via le studio CUSTOM) : l'envVariant est directement
+  // une URL Firebase Storage — on la passe telle quelle au moteur.
+  if (variantCode && variantCode.startsWith('http')) {
+    if (isFirebaseStorageHttpsUrl(variantCode)) return variantCode;
+    throw new Error("imageA : fond perso — seule une URL Firebase Storage est acceptée.");
+  }
   const effectiveCode = getEffectiveCode((variantCode || '07A01A').trim()).toUpperCase();
   if (storageAssetCache[effectiveCode] && isFirebaseStorageHttpsUrl(storageAssetCache[effectiveCode])) {
     return storageAssetCache[effectiveCode];
@@ -3254,6 +3272,22 @@ const EnvironmentScreen: React.FC<{
   const longPressTimer = useRef<any>(null);
   const isLongPress = useRef(false);
 
+  // Onglet « PERSO » : les fonds générés par l'utilisateur via le studio CUSTOM
+  // (4 emplacements). L'envVariant devient l'URL Firebase du fond — toute la
+  // chaîne (aperçu, moteur) accepte les URLs directes.
+  const { user: envUser } = useAuth();
+  const [persoFonds, setPersoFonds] = useState<CustomAsset[]>([]);
+  useEffect(() => {
+    const uid = envUser?.uid;
+    if (!uid || envUser?.isAnonymous) { setPersoFonds([]); return; }
+    let cancelled = false;
+    (async () => {
+      const fonds = await listSavedCustomBackgrounds(uid);
+      if (!cancelled) setPersoFonds(fonds);
+    })();
+    return () => { cancelled = true; };
+  }, [envUser]);
+
   const closeMenu = () => { setActiveMenu(null); setConfirmDeleteIdx(null); };
 
   // Preload images for better responsiveness
@@ -3356,19 +3390,35 @@ const EnvironmentScreen: React.FC<{
         <SharedPreview {...previewProps} envVariant={variant} />
         
         <div className="px-6 space-y-2">
-          {/* Main Category Tabs - Simplified text-only */}
-          <div className="grid grid-cols-4 gap-1">
+          {/* Main Category Tabs - Simplified text-only (+ PERSO en 1er) */}
+          <div className="grid grid-cols-5 gap-1">
+            <button
+              key="perso"
+              onClick={() => {
+                onCategory('perso');
+                // Sélectionne d'office le 1er fond perso s'il existe.
+                if (persoFonds[0]) onVariant(persoFonds[0].url);
+              }}
+              className={cn(
+                "h-[32px] px-1 text-[8.5px] font-bold uppercase tracking-widest transition-all flex items-center justify-center",
+                category === 'perso'
+                  ? "bg-white text-black font-black"
+                  : "bg-white/5 text-white/50 border border-white/10"
+              )}
+            >
+              Perso
+            </button>
             {CATEGORIES.map((cat) => (
-              <button 
+              <button
                 key={cat.id}
                 onClick={() => {
                   onCategory(cat.id);
                   onVariant(VARIANTS[cat.id][0].id + 'A');
                 }}
                 className={cn(
-                  "h-[32px] px-1 text-[9px] font-bold uppercase tracking-widest transition-all flex items-center justify-center",
-                  category === cat.id 
-                    ? "bg-white text-black font-black" 
+                  "h-[32px] px-1 text-[8.5px] font-bold uppercase tracking-widest transition-all flex items-center justify-center",
+                  category === cat.id
+                    ? "bg-white text-black font-black"
                     : "bg-white/5 text-white/50 border border-white/10"
                 )}
               >
@@ -3377,7 +3427,54 @@ const EnvironmentScreen: React.FC<{
             ))}
           </div>
 
-          {/* Variants with thumbnails - Compact pixel height */}
+          {/* PERSO : 4 emplacements pour les fonds générés via le studio CUSTOM */}
+          {category === 'perso' ? (
+          <div className="grid grid-cols-2 gap-1.5">
+            {Array.from({ length: 4 }).map((_, i) => {
+              const fond = persoFonds[i];
+              if (!fond) {
+                return (
+                  <div
+                    key={`empty-${i}`}
+                    className="h-[52px] border border-dashed border-white/15 bg-white/[0.02] flex items-center justify-center"
+                  >
+                    <span className="px-1 text-center text-[7px] uppercase tracking-widest text-white/25 leading-tight">
+                      Mon espace → Custom
+                    </span>
+                  </div>
+                );
+              }
+              const isSelected = variant === fond.url;
+              return (
+                <div
+                  key={fond.url}
+                  onClick={() => onVariant(fond.url)}
+                  className={cn(
+                    "group relative cursor-pointer overflow-hidden transition-all flex flex-col h-[52px]",
+                    isSelected ? "ring-2 ring-inset ring-white" : "bg-white/5"
+                  )}
+                >
+                  <img
+                    src={fond.url}
+                    alt={`Fond ${i + 1}`}
+                    referrerPolicy="no-referrer"
+                    loading="lazy"
+                    className="h-full w-full object-cover opacity-80"
+                  />
+                  <div className="absolute inset-0 bg-black/10" />
+                  <div className="absolute inset-0 flex items-center justify-center p-1">
+                    <span className={cn(
+                      "text-[9px] font-bold uppercase tracking-[0.15em] text-white text-center drop-shadow-lg",
+                      isSelected ? "opacity-100" : "opacity-80"
+                    )}>
+                      Fond {i + 1}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          ) : (
           <div className="grid grid-cols-2 gap-1.5">
             {currentVariants.map((v) => {
               const isSelected = variant?.startsWith(v.code);
@@ -3434,6 +3531,7 @@ const EnvironmentScreen: React.FC<{
               );
             })}
           </div>
+          )}
 
           {/* Favoris (10 emplacements, 2 rangées) */}
           <div className="grid grid-cols-5 gap-1 pb-2 relative">
@@ -3607,16 +3705,19 @@ const CustomBrandDropdown: React.FC<CustomBrandDropdownProps> = ({
         <div className={cn(
           "absolute bottom-full mb-1 bg-zinc-950 border border-white/10 shadow-2xl z-50 flex flex-col transition-all duration-200",
           size === 'sm'
-            ? (showSearchResults ? "right-0 w-[290px] h-auto max-h-[470px]" : "right-0 w-[245px] h-[245px]")
+            /* Recherche : 5 vignettes visibles max (68px chacune) pour ne pas
+               sortir de l'écran iPhone en haut, et léger décalage vers la
+               droite pour ne pas déborder du bord gauche. */
+            ? (showSearchResults ? "right-[-14px] w-[290px] h-auto max-h-[372px]" : "right-0 w-[245px] h-[245px]")
             : "left-0 w-full max-h-[245px]"
         )}>
           {showSearchResults ? (
             <div className="p-1 flex flex-col overflow-hidden w-full">
-              <div className="px-2 py-1 text-[7px] tracking-wider font-mono text-white/40 uppercase border-b border-white/5 mb-1 shrink-0">
+              <div className="px-2 py-1 text-[8px] tracking-wider font-mono text-white uppercase border-b border-white/5 mb-1 shrink-0">
                 Résultats de recherche ({filteredLogos.length})
               </div>
               {filteredLogos.length > 0 ? (
-                <div className="flex flex-col gap-0 overflow-y-auto max-h-[408px] pr-0.5">
+                <div className="flex flex-col gap-0 overflow-y-auto max-h-[340px] pr-0.5">
                   {filteredLogos.map(logo => {
                     const isSelected = selectedLogoUrl === logo.url;
                     return (
@@ -3790,6 +3891,38 @@ const BrandingLogoScreen: React.FC<{
   const [logoMode, setLogoMode] = React.useState<'votre_logo' | 'constructeurs'>('votre_logo');
   const [uploadedLogo, setUploadedLogo] = React.useState<string | null>(null);
   const [constructeurLogo, setConstructeurLogo] = React.useState<string | null>(null);
+
+  // Clavier virtuel intégré : les champs texte sont readOnly + inputMode="none"
+  // pour que le clavier iOS ne s'ouvre JAMAIS (il poussait toute l'app hors
+  // cadre). kbTarget = champ en cours d'édition.
+  const [kbTarget, setKbTarget] = React.useState<null | 'text' | 'search'>(null);
+
+  const kbActivateSearch = () => {
+    if (!(showLogo && logoMode === 'constructeurs')) {
+      onShowLogo(true);
+      setLogoMode('constructeurs');
+      onCustomLogo(constructeurLogo);
+    }
+  };
+
+  const handleKbKey = (char: string) => {
+    if (kbTarget === 'text') {
+      const val = (logoText + char).toUpperCase().slice(0, 30);
+      onLogoTextChange(val);
+      if (!showText) onShowText(true);
+    } else if (kbTarget === 'search') {
+      setSearchTerm((searchTerm + char).toUpperCase());
+      kbActivateSearch();
+    }
+  };
+
+  const handleKbBackspace = () => {
+    if (kbTarget === 'text') {
+      onLogoTextChange(logoText.slice(0, -1));
+    } else if (kbTarget === 'search') {
+      setSearchTerm(searchTerm.slice(0, -1));
+    }
+  };
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -4022,24 +4155,24 @@ const BrandingLogoScreen: React.FC<{
               
               {/* Input */}
               <div className="flex-1">
-                <Input 
-                  placeholder="SAISIR VOTRE TEXTE..." 
+                <Input
+                  placeholder="SAISIR VOTRE TEXTE..."
                   value={logoText}
                   maxLength={30}
+                  readOnly
+                  inputMode="none"
                   onFocus={() => {
                     if (!showText) onShowText(true);
+                    setKbTarget('text');
                   }}
                   onClick={() => {
                     if (!showText) onShowText(true);
-                  }}
-                  onChange={(e) => {
-                    const val = e.target.value.toUpperCase();
-                    onLogoTextChange(val);
-                    if (!showText) onShowText(true);
+                    setKbTarget('text');
                   }}
                   className={cn(
-                    "h-8 rounded-none bg-white/[0.02] border-white/10 text-left px-2.5 text-base md:text-[8px] tracking-[0.1em] uppercase transition-opacity w-full font-sans",
-                    !showText && "opacity-60"
+                    "h-8 rounded-none bg-white/[0.02] border-white/10 text-left px-2.5 text-base md:text-[8px] tracking-[0.1em] uppercase transition-opacity w-full font-sans cursor-pointer",
+                    !showText && "opacity-60",
+                    kbTarget === 'text' && "border-white/50 ring-1 ring-inset ring-white/30"
                   )}
                 />
               </div>
@@ -4123,32 +4256,23 @@ const BrandingLogoScreen: React.FC<{
                   <div className="space-y-1 w-full">
                     {/* Rechercher un constructeur remonté à la place du dropdown */}
                     <div className="relative">
-                      <Input 
-                        placeholder="RECHERCHER..." 
+                      <Input
+                        placeholder="RECHERCHER..."
                         value={searchTerm}
+                        readOnly
+                        inputMode="none"
                         onFocus={() => {
-                          if (!(showLogo && logoMode === 'constructeurs')) {
-                            onShowLogo(true);
-                            setLogoMode('constructeurs');
-                            onCustomLogo(constructeurLogo);
-                          }
+                          kbActivateSearch();
+                          setKbTarget('search');
                         }}
                         onClick={() => {
-                          if (!(showLogo && logoMode === 'constructeurs')) {
-                            onShowLogo(true);
-                            setLogoMode('constructeurs');
-                            onCustomLogo(constructeurLogo);
-                          }
+                          kbActivateSearch();
+                          setKbTarget('search');
                         }}
-                        onChange={(e) => {
-                          setSearchTerm(e.target.value);
-                          if (!(showLogo && logoMode === 'constructeurs')) {
-                            onShowLogo(true);
-                            setLogoMode('constructeurs');
-                            onCustomLogo(constructeurLogo);
-                          }
-                        }}
-                        className="h-7 rounded-none bg-white/5 border-white/10 text-left px-2 text-base md:text-[7.5px] text-white placeholder:text-zinc-400 tracking-wider uppercase w-full pr-6 font-sans"
+                        className={cn(
+                          "h-7 rounded-none bg-white/5 border-white/10 text-left px-2 text-base md:text-[7.5px] text-white placeholder:text-zinc-400 tracking-wider uppercase w-full pr-6 font-sans cursor-pointer",
+                          kbTarget === 'search' && "border-white/50 ring-1 ring-inset ring-white/30"
+                        )}
                       />
                       {searchTerm && (
                         <button 
@@ -4242,11 +4366,22 @@ const BrandingLogoScreen: React.FC<{
           )}
         </div>
       </div>
+
+      {/* Clavier virtuel intégré — remplace le clavier iOS qui poussait l'app
+          hors cadre. S'affiche par-dessus le footer, l'app ne bouge pas. */}
+      <VirtualKeyboard
+        open={kbTarget !== null}
+        label={kbTarget === 'text' ? (logoText || 'VOTRE TEXTE') : (searchTerm || 'RECHERCHER UN CONSTRUCTEUR')}
+        showDigits={kbTarget === 'text'}
+        onKey={handleKbKey}
+        onBackspace={handleKbBackspace}
+        onDone={() => setKbTarget(null)}
+      />
     </ScreenWrapper>
   );
 };
 
-const ColorLightScreen: React.FC<{ 
+const ColorLightScreen: React.FC<{
   theme: string, 
   onThemeChange: (t: string) => void, 
   intensity: number,
@@ -4428,19 +4563,20 @@ async function checkPixelAlpha(element: HTMLElement, clientX: number, clientY: n
   }
 }
 
-const LivePreviewScreen: React.FC<{ 
-  onBack: () => void, 
-  onNext: () => void, 
+const LivePreviewScreen: React.FC<{
+  onBack: () => void,
+  onNext: () => void,
   onHome: () => void,
   onJump: (screen: Screen) => void,
+  onGenerateTwoModels: () => void,
   previewProps: any
-}> = ({ onBack, onNext, onHome, onJump, previewProps }) => {
+}> = ({ onBack, onNext, onHome, onJump, onGenerateTwoModels, previewProps }) => {
+  const { user } = useAuth();
+  const isAdmin = isAdminEmail(user?.email);
   const [showZones, setShowZones] = useState(false);
   const [selectedZone, setSelectedZone] = useState<string | null>(null);
   const [highlightStep, setHighlightStep] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [showAdjust, setShowAdjust] = useState(false);
-  const initialTransformRef = useRef({ ...previewProps.imageTransform });
 
   const [measuredZones, setMeasuredZones] = useState<Record<string, { top: string, left: string, width: string, height: string }>>({});
 
@@ -4643,196 +4779,34 @@ const LivePreviewScreen: React.FC<{
         </div>
 
         <div className="px-6 space-y-2.5">
-          <div className="flex gap-2">
-            <Button 
-              variant={showAdjust ? "default" : "secondary"}
-              onClick={() => setShowAdjust(!showAdjust)}
-              className={cn(
-                "flex-1 h-8 rounded-none text-[9px] font-bold uppercase tracking-widest transition-all bg-white text-black border border-white hover:bg-white/90 px-2",
-                !showAdjust && "bg-white/5 border-white/10 hover:bg-white/10 text-white"
-              )}
-            >
-              {showAdjust ? "CLOSE ADJUSTMENTS" : "ADJUST VEHICULE"}
-            </Button>
+          {/* Panneau « Adjust Vehicule » supprimé : le placement automatique du
+              véhicule fait foi — plus aucun réglage manuel, même en admin. */}
+          <Button
+            variant="secondary"
+            onClick={handleModifyClick}
+            className={cn(
+              "w-full h-8 rounded-none text-[9px] font-bold uppercase tracking-widest transition-all px-2 bg-white/10 text-white",
+              selectedZone && "ring-2 ring-inset ring-white"
+            )}
+          >
+            {getModifyLabel()}
+          </Button>
+        </div>
 
-            <Button 
+        {/* Bouton de test « 2 MODELS » — visible uniquement pour les comptes admin
+            (compte Google autorisé). Génère la même composition avec les deux
+            modèles Gemini (2.5 Flash + 3 Pro) pour comparer les rendus. */}
+        {isAdmin && (
+          <div className="px-6">
+            <Button
               variant="secondary"
-              onClick={handleModifyClick}
-              className={cn(
-                "flex-1 h-8 rounded-none text-[9px] font-bold uppercase tracking-widest transition-all px-2 bg-white/10 text-white",
-                selectedZone && "ring-2 ring-inset ring-white"
-              )}
+              onClick={onGenerateTwoModels}
+              className="w-full h-9 rounded-none text-[9px] font-bold uppercase tracking-widest transition-all bg-fuchsia-600/20 text-fuchsia-200 border border-fuchsia-500/40 hover:bg-fuchsia-600/30"
             >
-              {getModifyLabel()}
+              2 MODELS · Flash + 3&nbsp;Pro (test)
             </Button>
           </div>
-
-          <AnimatePresence>
-            {showAdjust && (
-              <motion.div 
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="bg-zinc-950 border border-white/10 p-3 space-y-3 overflow-hidden"
-              >
-                <div className="grid grid-cols-2 gap-3">
-                  {/* Scale Slider */}
-                  <div className="space-y-1 font-sans">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-[9px] font-mono font-bold tracking-wider text-white/50 uppercase">Échelle</span>
-                      <span className="text-[9px] font-mono text-white">
-                        {Math.round(((previewProps.imageTransform?.scale ?? 1.0) - (initialTransformRef.current?.scale ?? 1.0)) / (initialTransformRef.current?.scale ?? 1.0) * 100) > 0 ? "+" : ""}
-                        {Math.round(((previewProps.imageTransform?.scale ?? 1.0) - (initialTransformRef.current?.scale ?? 1.0)) / (initialTransformRef.current?.scale ?? 1.0) * 100)}%
-                      </span>
-                    </div>
-                    <input 
-                      type="range" 
-                      min="-50" 
-                      max="50" 
-                      step="1"
-                      value={Math.round(((previewProps.imageTransform?.scale ?? 1.0) - (initialTransformRef.current?.scale ?? 1.0)) / (initialTransformRef.current?.scale ?? 1.0) * 100)}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        const newScale = (initialTransformRef.current?.scale ?? 1.0) * (1 + val / 100);
-                        previewProps.onUpdateTransform({
-                          ...previewProps.imageTransform,
-                          scale: newScale
-                        });
-                      }}
-                      className="w-full h-1 bg-white/10 rounded-none appearance-none cursor-pointer accent-white"
-                    />
-                    <div className="flex justify-between text-[7px] font-mono text-white/30 leading-none">
-                      <span>-50%</span>
-                      <span>0%</span>
-                      <span>+50%</span>
-                    </div>
-                  </div>
-
-                  {/* Rotation Slider */}
-                  <div className="space-y-1">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-[9px] font-mono font-bold tracking-wider text-white/50 uppercase">Rotation</span>
-                      <span className="text-[9px] font-mono text-white">
-                        {(previewProps.imageTransform?.rotate ?? 0) > 0 ? "+" : ""}
-                        {(previewProps.imageTransform?.rotate ?? 0).toFixed(1)}°
-                      </span>
-                    </div>
-                    <input 
-                      type="range" 
-                      min="-10" 
-                      max="10" 
-                      step="0.1"
-                      value={previewProps.imageTransform?.rotate ?? 0}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        const capped = Math.min(10, Math.max(-10, val));
-                        previewProps.onUpdateTransform({
-                          ...previewProps.imageTransform,
-                          rotate: capped
-                        });
-                      }}
-                      className="w-full h-1 bg-white/10 rounded-none appearance-none cursor-pointer accent-white"
-                    />
-                    <div className="flex justify-between text-[7px] font-mono text-white/30 leading-none">
-                      <span>-10°</span>
-                      <span>0°</span>
-                      <span>+10°</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Position Joypad */}
-                <div className="pt-2 border-t border-white/5 flex items-center justify-between w-full">
-                  <div className="space-y-1">
-                    <span className="text-[9px] font-mono font-bold tracking-wider text-white/50 uppercase block">POSITION</span>
-                    <div className="flex gap-2 text-[8px] font-mono text-white/55">
-                      <div>X: <span className="text-white font-bold">{Math.round(previewProps.imageTransform?.x ?? 0)}%</span></div>
-                      <div>Y: <span className="text-white font-bold">{Math.round(previewProps.imageTransform?.y ?? 0)}%</span></div>
-                    </div>
-                    <button 
-                      onClick={() => {
-                        previewProps.onUpdateTransform({
-                          ...initialTransformRef.current
-                        });
-                      }}
-                      className="text-[7.5px] bg-white/5 hover:bg-white/10 px-1.5 py-1 text-white uppercase tracking-wider font-bold block transition-colors cursor-pointer mt-1"
-                    >
-                      RESET ALL
-                    </button>
-                  </div>
-                  
-                  {/* Visual Joypad Pad (Ultra-compacte 80px) */}
-                  <div className="relative w-20 h-20 bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
-                    <div className="absolute inset-x-0 h-px bg-white/10 pointer-events-none" />
-                    <div className="absolute inset-y-0 w-px bg-white/10 pointer-events-none" />
-                    
-                    <button 
-                      onClick={() => {
-                        previewProps.onUpdateTransform({
-                          ...previewProps.imageTransform,
-                          y: (previewProps.imageTransform?.y ?? 0) - 2
-                        });
-                      }}
-                      className="absolute top-0.5 left-1/2 -translate-x-1/2 w-5.5 h-5.5 bg-zinc-900 border border-white/10 active:bg-white active:text-black transition-colors flex items-center justify-center text-white text-[8px] cursor-pointer"
-                      title="Move Up"
-                    >
-                      ▲
-                    </button>
-                    <button 
-                      onClick={() => {
-                        previewProps.onUpdateTransform({
-                          ...previewProps.imageTransform,
-                          x: (previewProps.imageTransform?.x ?? 0) - 2
-                        });
-                      }}
-                      className="absolute left-0.5 top-1/2 -translate-y-1/2 w-5.5 h-5.5 bg-zinc-900 border border-white/10 active:bg-white active:text-black transition-colors flex items-center justify-center text-white text-[8px] cursor-pointer"
-                      title="Move Left"
-                    >
-                      ◀
-                    </button>
-                    <button 
-                      onClick={() => {
-                        previewProps.onUpdateTransform({
-                          ...previewProps.imageTransform,
-                          x: initialTransformRef.current?.x ?? 0,
-                          y: initialTransformRef.current?.y ?? 0
-                        });
-                      }}
-                      className="absolute inset-0 m-auto w-5.5 h-5.5 bg-zinc-800 border border-white/20 active:bg-white active:text-black text-[6px] font-bold text-white flex items-center justify-center cursor-pointer"
-                      title="Center Reset"
-                    >
-                      RST
-                    </button>
-                    <button 
-                      onClick={() => {
-                        previewProps.onUpdateTransform({
-                          ...previewProps.imageTransform,
-                          x: (previewProps.imageTransform?.x ?? 0) + 2
-                        });
-                      }}
-                      className="absolute right-0.5 top-1/2 -translate-y-1/2 w-5.5 h-5.5 bg-zinc-900 border border-white/10 active:bg-white active:text-black transition-colors flex items-center justify-center text-white text-[8px] cursor-pointer"
-                      title="Move Right"
-                    >
-                      ▶
-                    </button>
-                    <button 
-                      onClick={() => {
-                        previewProps.onUpdateTransform({
-                          ...previewProps.imageTransform,
-                          y: (previewProps.imageTransform?.y ?? 0) + 2
-                        });
-                      }}
-                      className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-5.5 h-5.5 bg-zinc-900 border border-white/10 active:bg-white active:text-black transition-colors flex items-center justify-center text-white text-[8px] cursor-pointer"
-                      title="Move Down"
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+        )}
       </div>
     </ScreenWrapper>
   );
@@ -4871,7 +4845,121 @@ const FUNNY_LOADING_PHRASES = [
   'Positionnement du véhicule sur le sol',
   'Séchage sans aucune trace',
 ];
-const FUNNY_LOADING_EMOJIS = ['🧽', '🔧', '🚗', '✨', '🪣', '💨', '🧴'];
+
+// « LE SAVIEZ-VOUS » — lecture pendant la génération, sous la barre de
+// progression. Mélange volontaire : culture art × automobile, histoire de la
+// publicité/petites annonces, et conseils concrets pour mieux vendre — sans
+// jamais citer de marque (aucune mise en avant).
+const DID_YOU_KNOW = [
+  "En 1909, le manifeste futuriste proclamait qu'une automobile rugissante était « plus belle que la Victoire de Samothrace ».",
+  "Dans les années 60, le pop art a hissé la voiture au rang d'icône, aux côtés des stars de cinéma et des boîtes de soupe.",
+  "Les premières petites annonces automobiles paraissent dans les journaux avant même l'invention du permis de conduire (1893).",
+  "Une annonce avec un fond épuré attire davantage l'œil : le regard se concentre sur le véhicule, pas sur le décor.",
+  "Les photographes automobiles shootent souvent à hauteur de calandre : le véhicule paraît plus imposant et sculptural.",
+  "La lumière douce du matin ou de fin de journée (« golden hour ») est celle qui flatte le plus une carrosserie.",
+  "Au 20ᵉ siècle, les affiches automobiles étaient peintes à la main par de véritables artistes — certaines s'exposent aujourd'hui en galerie.",
+  "Une annonce avec plusieurs photos de qualité reçoit jusqu'à 3 fois plus de contacts qu'une annonce avec une seule image.",
+  "Le design automobile s'inspire souvent de la sculpture : tension des lignes, jeu d'ombres, proportions dorées.",
+  "Les studios photo automobiles utilisent des fonds infinis (cycloramas) pour effacer toute distraction — exactement ce que fait votre photobooth.",
+  "Premier réflexe des acheteurs : zoomer sur les jantes et les optiques. Des photos nettes inspirent confiance.",
+  "Dans l'histoire de la publicité, l'automobile est le produit qui a fait naître le plus de slogans devenus cultes.",
+  "Un véhicule photographié de trois quarts avant paraît plus dynamique qu'une vue strictement de profil.",
+  "Les grands musées d'art moderne exposent des automobiles comme des œuvres à part entière depuis les années 50.",
+  "Une carrosserie sombre réfléchit son environnement comme un miroir : un fond calme évite les reflets parasites.",
+  "Le mot « berline » vient de la ville de Berlin, où fut inventée cette carrosse hippomobile confortable au 17ᵉ siècle.",
+  "Les annonces qui indiquent un prix juste dès le départ se vendent plus vite que celles qui « laissent la négociation ouverte ».",
+  "Le principe du photomontage publicitaire date des années 1920 — vous utilisez la version IA d'une technique centenaire.",
+  "Sur les petites annonces, la photo principale décide en moins d'une seconde si l'acheteur clique ou passe.",
+  "L'aérodynamique moderne est née dans l'art : les carrosseries profilées des années 30 imitaient les sculptures streamline.",
+  "Un intérieur propre et photographié portes ouvertes rassure autant qu'un moteur qui démarre au quart de tour.",
+  "Les peintres impressionnistes furent parmi les premiers à représenter la vitesse et le mouvement mécanique.",
+  "Le cinéma a inventé la « voiture star » : certains véhicules ont leur propre agent artistique.",
+  "Décrire l'entretien et l'historique dans l'annonce augmente nettement le taux de réponse des acheteurs sérieux.",
+];
+
+// Variante MOTO (vehicleCategory === 'bike')
+const FUNNY_LOADING_PHRASES_MOTO = [
+  'Lustrage du réservoir',
+  'Graissage de la chaîne',
+  'Chauffe des pneus',
+  'Polissage des chromes',
+  'Nettoyage de la visière',
+  'Dépoussiérage du casque',
+  'Réglage des rétroviseurs',
+  'Essuyage de la selle',
+  'Resserrage des derniers boulons',
+  'Petit coup de kick pour le style',
+  'Réveil du premier cylindre',
+  'Recherche du point mort',
+  'Réglage du ralenti (vroum vroum)',
+  'Retrait des moustiques du phare',
+  'Béquille réglée pour la pose',
+  'Alignement de la roue avant',
+  'Contrôle des clignotants',
+  'Test du klaxon (bip bip)',
+  'Cirage des sacoches',
+  'Pliage de la combinaison en cuir',
+  'Wheeling strictement interdit (dommage)',
+  'Réglage de la suspension',
+  'Comptage des chevaux (et des deux roues)',
+  'Chauffe du pot d\'échappement',
+  'Retrait du CD de George Michael',
+  'Vérification de l\'angle d\'inclinaison',
+  'Rangement des gants dans le casque',
+  'Astiquage de la bulle',
+  'Vérification de la pression des pneus',
+  'Dernier coup de chiffon sur le phare',
+  'Échauffement du poignet droit',
+  'Lavage des jantes',
+  'Regonflage des pneus',
+  'Retrait des moustiques sur la bulle',
+  'Chasse aux traces de doigts sur le réservoir',
+  'Dépoussiérage des compteurs',
+  'Déroulage du tapis rouge',
+  'Chauffe du moteur (juste pour la pose)',
+  'Dernier coup de chiffon',
+  'Recherche des clés perdues',
+  'Réveil des cylindres',
+  'Époussetage de la selle passager',
+  'Retrait du porte-clés de George Michael',
+  'Positionnement des deux roues sur le sol',
+  'Séchage sans aucune trace',
+  'Remise en place des chicanes d\'échappement',
+];
+
+// Variante CAMION / UTILITAIRE (vehicleCategory === 'utility')
+const FUNNY_LOADING_PHRASES_CAMION = [
+  'Lavage des roues (ça en fait, des roues)',
+  'Réglage des rétroviseurs XXL',
+  'Nettoyage du pare-brise panoramique',
+  'Gonflage des pneus',
+  'Coup de klaxon réglementaire (pouêêêt)',
+  'Dépoussiérage de la cabine',
+  'Rangement de la couchette',
+  'Plein de café pour la route',
+  'Cirage de la calandre',
+  'Vérification des sangles',
+  'Réglage du siège à suspension',
+  'Comptage des essieux',
+  'Polissage des jantes alu',
+  'Test des feux de gabarit',
+  'Vérification de la hauteur (gare au pont)',
+  'Chauffe du moteur (ça ronronne fort)',
+  'Nettoyage des bavettes',
+  'Réglage du limiteur (90 km/h, promis)',
+  'Contrôle de l\'angle mort',
+  'Astiquage du pare-soleil',
+  'Vérification du hayon',
+  'Petit appel à la CB (10-4, bien reçu)',
+  'Alignement de la remorque au millimètre',
+  'Dernier tour de sangle',
+  'Dégivrage des grands rétros',
+  'Inspection du marchepied',
+  'Lustrage du logo sur la calandre',
+  'Vérification de la charge utile (que du style)',
+  'Époussetage du tachygraphe',
+  'Salut du routier qui passe (tradition)',
+];
 
 const GenerationScreen: React.FC<{
   onComplete: () => void;
@@ -4884,15 +4972,55 @@ const GenerationScreen: React.FC<{
 }> = ({ onComplete, onCancel, previewProps, currentJobStatus, currentJobId, currentJobError, onSimulateLocal }) => {
   const [localProgress, setLocalProgress] = useState(0);
   const [copied, setCopied] = useState(false);
-  const [funnyIdx, setFunnyIdx] = useState(() => Math.floor(Math.random() * FUNNY_LOADING_PHRASES.length));
+  // Deck de phrases humoristiques MÉLANGÉ une fois par génération : ordre
+  // aléatoire mais chaque phrase n'est vue qu'UNE seule fois sur la progression
+  // totale (pas de répétition). Une nouvelle phrase toutes les 4 secondes.
+  // Le deck s'adapte au type de véhicule : moto, camion/utilitaire ou voiture.
+  const funnyDeckRef = useRef<string[]>(
+    [...(previewProps.vehicleCategory === 'bike'
+      ? FUNNY_LOADING_PHRASES_MOTO
+      : previewProps.vehicleCategory === 'utility'
+        ? FUNNY_LOADING_PHRASES_CAMION
+        : FUNNY_LOADING_PHRASES)].sort(() => Math.random() - 0.5)
+  );
+  const [funnyIdx, setFunnyIdx] = useState(0);
+  // Les infos techniques (job ID, statuts Firestore, panneau de diagnostic) ne
+  // concernent que le debug : réservées au mode admin. Le grand public ne voit
+  // que la barre de progression et les phrases humoristiques.
+  const { user: authUserGen } = useAuth();
+  const isAdmin = isAdminEmail(authUserGen?.email);
 
-  // Rotation des fausses phrases de chargement tant que la génération est en cours.
   useEffect(() => {
     if (currentJobStatus === 'error' || currentJobStatus === 'completed') return;
     const id = setInterval(() => {
-      setFunnyIdx((i) => (i + 1) % FUNNY_LOADING_PHRASES.length);
-    }, 2200);
+      // On avance dans le deck sans reboucler : la dernière phrase reste
+      // affichée si la génération dure plus longtemps que le deck.
+      setFunnyIdx((i) => Math.min(i + 1, funnyDeckRef.current.length - 1));
+    }, 4000);
     return () => clearInterval(id);
+  }, [currentJobStatus]);
+
+  // « LE SAVIEZ-VOUS » sous la barre : lecture pendant l'attente. Rotation plus
+  // lente (9s = temps de lecture confortable), deck mélangé sans répétition.
+  const knowDeckRef = useRef<string[]>([...DID_YOU_KNOW].sort(() => Math.random() - 0.5));
+  const [knowIdx, setKnowIdx] = useState(0);
+  useEffect(() => {
+    if (currentJobStatus === 'error' || currentJobStatus === 'completed') return;
+    const id = setInterval(() => {
+      setKnowIdx((i) => Math.min(i + 1, knowDeckRef.current.length - 1));
+    }, 9000);
+    return () => clearInterval(id);
+  }, [currentJobStatus]);
+
+  // Panneau de diagnostic (admin) : seulement si le job semble RÉELLEMENT bloqué
+  // (>25s sans avancer). En fonctionnement normal il faisait défiler l'écran —
+  // objectif : tout tient sur un écran d'iPhone, sans scroll.
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    setStalled(false);
+    if (currentJobStatus !== 'pending' && currentJobStatus !== 'processing') return;
+    const t = setTimeout(() => setStalled(true), 25000);
+    return () => clearTimeout(t);
   }, [currentJobStatus]);
 
   const handleCopyConfig = () => {
@@ -4918,15 +5046,20 @@ const GenerationScreen: React.FC<{
             clearInterval(interval);
             return p;
           }
-          if (p >= 98) return 98;
-          return p + 1;
+          // Montée ASYMPTOTIQUE vers 95% : le pas rétrécit à mesure qu'on
+          // approche du plafond, calibré sur une vraie génération (~30-60s).
+          // Avant : +1 toutes les 180ms → 98% atteint en ~18s puis longue
+          // stagnation peu crédible pendant le vrai traitement Gemini.
+          if (p >= 95) return 95;
+          const step = Math.max(0.15, (95 - p) / 55);
+          return Math.min(95, p + step);
         } else {
           // Pre-loading preparation progress cap at 45% while jobId is being registered
           if (p >= 45) return 45;
           return p + 3;
         }
       });
-    }, currentJobId ? 180 : 50);
+    }, currentJobId ? 250 : 50);
 
     return () => clearInterval(interval);
   }, [onComplete, currentJobId, currentJobStatus]);
@@ -4936,7 +5069,7 @@ const GenerationScreen: React.FC<{
       case 'pending':
         return 'Téléchargement de votre photo détourée et du fond choisi vers Firebase...';
       case 'processing':
-        return 'En attente de NodeGen Studio. Le traitement par Gemini est actif...';
+        return ''; // pas de jargon technique pendant le traitement (phrases humoristiques seules)
       case 'completed':
         return 'L\'image finale HD a été reçue ! Affichage en cours...';
       case 'error':
@@ -4967,13 +5100,20 @@ const GenerationScreen: React.FC<{
         </div>
 
         <div className="px-6 mt-8 space-y-4 font-mono">
-          <div className="flex justify-between items-end">
-            <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">
-              {currentJobId ? "STATUT TEMPS RÉEL" : "AI PROGRESS"}
-            </span>
-            <span className="text-xl font-mono">{localProgress}%</span>
-          </div>
-          
+          {/* Fausses phrases de chargement (patience avec le sourire) — au-dessus
+              de la barre, sans picto, sans pourcentage ni libellé technique. */}
+          {currentJobStatus !== 'error' && currentJobStatus !== 'completed' && (
+            <motion.div
+              key={funnyIdx}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35 }}
+              className="text-[11px] tracking-wide text-white/70"
+            >
+              {funnyDeckRef.current[funnyIdx]}…
+            </motion.div>
+          )}
+
           <div className="w-full h-1 bg-white/10 rounded-none overflow-hidden">
             <motion.div
               className={cn(
@@ -4985,21 +5125,23 @@ const GenerationScreen: React.FC<{
             />
           </div>
 
-          {/* Fausses phrases de chargement (patience avec le sourire) */}
+          {/* LE SAVIEZ-VOUS — lecture pendant l'attente (culture & conseils, sans marques) */}
           {currentJobStatus !== 'error' && currentJobStatus !== 'completed' && (
             <motion.div
-              key={funnyIdx}
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35 }}
-              className="flex items-center gap-2 text-[11px] tracking-wide text-white/70"
+              key={`know-${knowIdx}`}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.5 }}
+              className="pt-1 font-sans"
             >
-              <span>{FUNNY_LOADING_EMOJIS[funnyIdx % FUNNY_LOADING_EMOJIS.length]}</span>
-              <span>{FUNNY_LOADING_PHRASES[funnyIdx]}…</span>
+              <p className="mb-1 text-[8px] font-bold uppercase tracking-[0.25em] text-white/35">Le saviez-vous ?</p>
+              <p className="text-[10.5px] leading-relaxed text-white/55">
+                {knowDeckRef.current[knowIdx]}
+              </p>
             </motion.div>
           )}
 
-          {currentJobId && (
+          {currentJobId && isAdmin && (
             <div className="pt-2 space-y-3 border-t border-white/5 text-[9px] text-white/50 tracking-wide">
               {/* Status List */}
               <div className="space-y-2">
@@ -5053,8 +5195,10 @@ const GenerationScreen: React.FC<{
                 </div>
               </div>
 
-              {/* Troubleshooting Diagnostics Panel (visible when stuck in pending/processing) */}
-              {(currentJobStatus === 'pending' || currentJobStatus === 'processing') && (
+              {/* Troubleshooting Diagnostics Panel — uniquement si le job est
+                  réellement bloqué (stalled >25s), pour ne jamais faire défiler
+                  l'écran pendant une génération normale. */}
+              {(currentJobStatus === 'pending' || currentJobStatus === 'processing') && stalled && (
                 <div className="p-3 bg-zinc-900 border border-white/10 text-[10px] space-y-3 font-sans mt-4 text-white/80">
                   <div className="flex items-center gap-2 text-yellow-500 font-bold">
                     <AlertCircle className="w-3.5 h-3.5 min-w-[14px]" />
@@ -5101,22 +5245,25 @@ const GenerationScreen: React.FC<{
                 </div>
               )}
 
-              {currentJobStatus === 'error' && (
-                <div className="mt-4 p-3 bg-red-950/40 border border-red-500/20 text-red-300 rounded-none text-[10px] space-y-2 font-sans">
-                  <p className="font-bold">Erreur signalée par le Studio.</p>
-                  {currentJobError && (
-                    <p className="text-[9px] opacity-90 font-mono break-all whitespace-pre-wrap">{currentJobError}</p>
-                  )}
-                  <p className="text-[9px] opacity-80">La génération n'a pas pu aboutir. Vérifiez que NodeGen Studio est démarré et que GEMINI_API_KEY est configurée.</p>
-                  <Button 
-                    variant="destructive"
-                    className="w-full h-8 rounded-none text-[9px] tracking-wider uppercase font-bold text-white mt-1 border border-red-500/30"
-                    onClick={onCancel}
-                  >
-                    Retourner au Montage
-                  </Button>
-                </div>
+            </div>
+          )}
+
+          {/* Bloc erreur : visible par TOUS (admin ou non) — il porte le bouton
+              de retour au montage, indispensable pour ne pas rester bloqué. */}
+          {currentJobId && currentJobStatus === 'error' && (
+            <div className="mt-4 p-3 bg-red-950/40 border border-red-500/20 text-red-300 rounded-none text-[10px] space-y-2 font-sans">
+              <p className="font-bold">Erreur signalée par le Studio.</p>
+              {currentJobError && (
+                <p className="text-[9px] opacity-90 font-mono break-all whitespace-pre-wrap">{currentJobError}</p>
               )}
+              <p className="text-[9px] opacity-80">La génération n'a pas pu aboutir. Veuillez réessayer.</p>
+              <Button
+                variant="destructive"
+                className="w-full h-8 rounded-none text-[9px] tracking-wider uppercase font-bold text-white mt-1 border border-red-500/30"
+                onClick={onCancel}
+              >
+                Retourner au Montage
+              </Button>
             </div>
           )}
         </div>
@@ -5138,11 +5285,12 @@ const ResultScreen: React.FC<{
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showMobileSaveModal, setShowMobileSaveModal] = useState(false);
   const [mobileImageUrl, setMobileImageUrl] = useState('');
-  const { isGuest, isEntitled, openAuth } = useAuth();
+  const { user, isGuest, isEntitled, openAuth } = useAuth();
   const [showUpsell, setShowUpsell] = useState(false);
   const [pendingDownload, setPendingDownload] = useState(false);
 
-  // Point d'entrée du bouton Download — 3 cas :
+  // Point d'entrée du bouton Download — 4 cas :
+  //  • admin en mode "2 MODELS" → télécharge les DEUX rendus (Flash + 3 Pro)
   //  • invité            → connexion d'abord, puis on reprend le flux
   //  • compte gratuit    → téléchargement AVEC filigrane incrusté + écran d'upsell
   //  • compte abonné/payé → téléchargement propre (HD, sans filigrane)
@@ -5154,6 +5302,41 @@ const ResultScreen: React.FC<{
     }
     if (!isEntitled) { doDownloadWatermarked(); return; }
     doDownload();
+  };
+
+  // Téléchargement admin "2 MODELS" : UN bouton par rendu (Flash / 3 Pro).
+  // Un seul fichier par clic : les navigateurs bloquent le 2ᵉ téléchargement
+  // programmatique déclenché hors du geste utilisateur (c'est pour ça que
+  // « tout télécharger d'un coup » n'enregistrait que le Flash).
+  const doDownloadOne = async (raw: string, filename: string) => {
+    setHasDownloaded(true);
+    const url = (raw.startsWith('data:') || raw.startsWith('http://') || raw.startsWith('https://'))
+      ? raw : `data:image/png;base64,${raw}`;
+    let blob: Blob | null = null;
+    try {
+      const r = await fetch(url);
+      if (r.ok) blob = await r.blob();
+    } catch { /* CORS → proxy ci-dessous */ }
+    if (!blob && url.startsWith('http')) {
+      try {
+        const r = await fetch(resolveApiUrl(`/api/proxy?url=${encodeURIComponent(url)}`));
+        if (r.ok) blob = await r.blob();
+      } catch (proxyErr) {
+        console.warn('[2 MODELS DOWNLOAD] Récupération via proxy échouée:', proxyErr);
+      }
+    }
+    const link = document.createElement('a');
+    link.download = filename;
+    if (blob) {
+      const objectUrl = URL.createObjectURL(blob);
+      link.href = objectUrl;
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } else {
+      link.href = url;
+      if (url.startsWith('http')) { link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    }
   };
 
   // Reprend le téléchargement juste après une connexion réussie, en réévaluant
@@ -5335,6 +5518,50 @@ const ResultScreen: React.FC<{
     }
   };
 
+  // Bouton SHARE : Web Share natif (feuille de partage iOS/Android) avec
+  // l'image finale. Compte gratuit → image filigranée (cohérent avec Download).
+  // Desktop sans Web Share → repli sur le téléchargement classique.
+  const handleShare = async () => {
+    if (isGuest) {
+      openAuth('Créez un compte gratuit pour partager votre visuel.');
+      return;
+    }
+    const raw = previewProps.currentJobResult;
+    if (!raw) return;
+    const srcUrl = (raw.startsWith('data:') || raw.startsWith('http://') || raw.startsWith('https://'))
+      ? raw : `data:image/png;base64,${raw}`;
+    try {
+      let blob: Blob | null = null;
+      if (!isEntitled) {
+        blob = await createWatermarkedBlob(srcUrl, GUEST_WATERMARK, (u) => resolveApiUrl(`/api/proxy?url=${encodeURIComponent(u)}`));
+      } else {
+        try {
+          const r = await fetch(srcUrl);
+          if (r.ok) blob = await r.blob();
+        } catch { /* CORS → proxy ci-dessous */ }
+        if (!blob && srcUrl.startsWith('http')) {
+          try {
+            const r = await fetch(resolveApiUrl(`/api/proxy?url=${encodeURIComponent(srcUrl)}`));
+            if (r.ok) blob = await r.blob();
+          } catch (proxyErr) {
+            console.warn('[SHARE] Récupération via proxy échouée:', proxyErr);
+          }
+        }
+      }
+      if (blob && typeof navigator.share === 'function') {
+        const file = new File([blob], `masterpiece-${Date.now()}.jpg`, { type: blob.type || 'image/jpeg' });
+        if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: 'Mon Masterpiece' });
+          return;
+        }
+      }
+      // Pas de Web Share disponible : on retombe sur le flux Download standard.
+      handleDownload();
+    } catch {
+      /* Partage annulé par l'utilisateur : rien à faire. */
+    }
+  };
+
   const handleResetClick = () => {
     setShowResetConfirm(true);
   };
@@ -5343,7 +5570,7 @@ const ResultScreen: React.FC<{
     <ScreenWrapper 
       title="Your Masterpiece" 
       onBack={onEdit} 
-      onNext={() => {}} 
+      onNext={handleShare}
       onHome={onReset}
       showHomeConfirm={true}
       nextLabel="SHARE"
@@ -5502,16 +5729,73 @@ const ResultScreen: React.FC<{
               </div>
             </div>
           )}
+
+          {/* Badge modèle (mode "2 MODELS" uniquement). */}
+          {previewProps.compareJobId && (
+            <span className="absolute top-1.5 left-1.5 z-30 bg-black/70 border border-white/20 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-white">
+              Gemini 2.5 Flash
+            </span>
+          )}
         </div>
 
+        {/* Second rendu (mode "2 MODELS" — modèle Gemini 3 Pro). */}
+        {previewProps.compareJobId && (
+          <div className="mb-2 overflow-hidden bg-black aspect-[4/3] flex items-center justify-center relative border border-fuchsia-500/40">
+            <span className="absolute top-1.5 left-1.5 z-30 bg-black/70 border border-fuchsia-500/40 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-fuchsia-200">
+              Gemini 3 Pro
+            </span>
+            {previewProps.compareJobResult ? (
+              <img
+                src={(previewProps.compareJobResult.startsWith('data:') || previewProps.compareJobResult.startsWith('http://') || previewProps.compareJobResult.startsWith('https://'))
+                  ? previewProps.compareJobResult
+                  : `data:image/png;base64,${previewProps.compareJobResult}`}
+                className="w-full h-full object-contain"
+                alt="Masterpiece — Gemini 3 Pro"
+                referrerPolicy="no-referrer"
+              />
+            ) : previewProps.compareJobStatus === 'error' ? (
+              <div className="px-6 text-center text-[9px] font-mono uppercase tracking-wider text-red-400 leading-relaxed">
+                {previewProps.compareJobError || 'La génération 3 Pro a échoué.'}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2 text-white/50">
+                <div className="w-6 h-6 border-2 border-fuchsia-400/40 border-t-fuchsia-300 rounded-full animate-spin" />
+                <span className="text-[8px] font-mono uppercase tracking-widest">Gemini 3 Pro en cours…</span>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="px-6 flex flex-col gap-1.5">
-          <Button 
+          {isAdminEmail(user?.email) && previewProps.compareJobId ? (
+            /* Mode "2 MODELS" (admin) : un bouton PAR image — un clic = un
+               fichier, seule façon fiable de télécharger les deux rendus. */
+            <div className="flex gap-1.5">
+              <Button
+                className="flex-1 rounded-none h-12 flex items-center justify-center gap-2 bg-white text-black text-[10px] uppercase font-bold tracking-widest hover:bg-white/90"
+                onClick={() => previewProps.currentJobResult && doDownloadOne(previewProps.currentJobResult, `masterpiece-flash-${Date.now()}.png`)}
+              >
+                <Download size={14} />
+                DL Flash
+              </Button>
+              <Button
+                disabled={!previewProps.compareJobResult}
+                className="flex-1 rounded-none h-12 flex items-center justify-center gap-2 bg-fuchsia-600/20 text-fuchsia-200 border border-fuchsia-500/40 text-[10px] uppercase font-bold tracking-widest hover:bg-fuchsia-600/30 disabled:opacity-30"
+                onClick={() => previewProps.compareJobResult && doDownloadOne(previewProps.compareJobResult, `masterpiece-3pro-${Date.now()}.png`)}
+              >
+                <Download size={14} />
+                DL 3 Pro
+              </Button>
+            </div>
+          ) : (
+          <Button
             className="w-full rounded-none h-12 flex items-center justify-center gap-2 bg-white text-black text-[10px] uppercase font-bold tracking-widest hover:bg-white/90"
             onClick={handleDownload}
           >
             <Download size={14} />
             Download
           </Button>
+          )}
 
         <Button 
           variant="secondary"
@@ -6098,7 +6382,78 @@ const MainApp = () => {
     };
   }, [state.currentJobId]);
 
-  const handleStartCompositingJob = async () => {
+  // Listener du SECOND job (mode "2 MODELS" — modèle 3 Pro). Miroir du listener
+  // principal, mais alimente les champs compareJob*. Actif seulement quand un
+  // compareJobId existe (donc uniquement après un clic sur « 2 MODELS »).
+  useEffect(() => {
+    if (!state.compareJobId) return;
+    const compareId = state.compareJobId;
+    let isSubscribed = true;
+    let fallbackPollInterval: any = null;
+
+    const applyData = (data: any) => {
+      let status = data.status || 'pending';
+      if (status === 'failed') status = 'error';
+      const finalResult = data.imageFinal || data.imageUrl || null;
+      const jobError = data.apiError || data.errorMessage || data.error || null;
+      setState(prev => {
+        if (prev.compareJobId !== compareId) return prev;
+        return {
+          ...prev,
+          compareJobStatus: status as any,
+          compareJobResult: finalResult,
+          compareJobError: jobError || (status === 'error' && !finalResult
+            ? 'La génération Gemini (3 Pro) a échoué sans image finale.'
+            : null)
+        };
+      });
+    };
+
+    const startFallbackPoll = () => {
+      if (fallbackPollInterval) return;
+      fallbackPollInterval = setInterval(async () => {
+        try {
+          const response = await fetch(resolveApiUrl(`/api/jobs/${compareId}`));
+          if (response.ok && isSubscribed) applyData(await response.json());
+        } catch (pollErr) {
+          console.error("[PWA 2 MODELS] Polling local du 2ᵉ job en échec:", pollErr);
+        }
+      }, 3000);
+    };
+
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = onSnapshot(
+        doc(db, 'exports', compareId),
+        (snapshot) => {
+          if (!isSubscribed) return;
+          if (snapshot.exists()) applyData(snapshot.data());
+        },
+        (error) => {
+          if (isSubscribed) {
+            console.warn("[PWA 2 MODELS] Firestore listener 2ᵉ job en erreur, bascule polling local:", error);
+            startFallbackPoll();
+          }
+        }
+      );
+    } catch (e) {
+      console.warn("[PWA 2 MODELS] Souscription Firestore 2ᵉ job échouée, polling local immédiat:", e);
+      startFallbackPoll();
+    }
+
+    return () => {
+      isSubscribed = false;
+      try { unsubscribe(); } catch (e) {}
+      if (fallbackPollInterval) clearInterval(fallbackPollInterval);
+    };
+  }, [state.compareJobId]);
+
+  const handleStartCompositingJob = async (opts?: { compareModels?: boolean }) => {
+    // Mode "2 MODELS" (test admin) : on soumet DEUX jobs partageant exactement la
+    // même composition (IMAGE_A/B/C, branding…) mais avec un modèle Gemini
+    // différent, afin de comparer Flash vs 3 Pro. La composition (coûteuse) n'est
+    // calculée qu'une seule fois ; seul le champ `model` du doc Firestore diffère.
+    const compareModels = !!opts?.compareModels;
     const authInstance = getAuth();
     const auth = authInstance;
     if (!authInstance.currentUser) {
@@ -6110,14 +6465,19 @@ const MainApp = () => {
         console.warn("[PWA AUTH] Anonymous sign-in failed (possibly restricted):", authErr);
       }
     }
-    
-    let jobId = '';
-    try {
-      jobId = doc(collection(db, 'exports')).id;
-    } catch (e) {
-      jobId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-      console.warn("[PWA AUTH] Failed getting Firestore document ID, generated local random jobId:", jobId);
-    }
+
+    const newExportId = (): string => {
+      try {
+        return doc(collection(db, 'exports')).id;
+      } catch (e) {
+        console.warn("[PWA AUTH] Failed getting Firestore document ID, generated local random jobId.");
+        return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      }
+    };
+
+    let jobId = newExportId();
+    // Second job (modèle 3 Pro) uniquement en mode comparaison.
+    const compareJobId = compareModels ? newExportId() : null;
 
     setState(prev => ({
       ...prev,
@@ -6125,7 +6485,11 @@ const MainApp = () => {
       currentJobStatus: 'pending',
       currentJobId: jobId,
       currentJobResult: null,
-      currentJobError: null
+      currentJobError: null,
+      compareJobId,
+      compareJobStatus: compareModels ? 'pending' : null,
+      compareJobResult: null,
+      compareJobError: null
     }));
 
     try {
@@ -6671,6 +7035,22 @@ const processPreview = async (base64Composite: string) => {
                   resolvedLogoId = logoPublicUrl;
                   finalCustomLogoValue = logoPublicUrl;
                   console.log("[PWA EXPORT LOGO] Firebase Storage upload successful. URL:", logoPublicUrl);
+                  // Mémorise ce logo dans le Brand Kit du compte (dossier client
+                  // Firebase) s'il n'en a pas encore : il devient réutilisable
+                  // partout (studio CUSTOM, prochaines sessions) sans re-import.
+                  try {
+                    const u = getAuth().currentUser;
+                    if (u && !u.isAnonymous) {
+                      const kitSnap = await getDoc(doc(customDb, 'brand_kits', u.uid));
+                      if (!kitSnap.exists() || !(kitSnap.data() as any)?.logoUrl) {
+                        await setDoc(doc(customDb, 'brand_kits', u.uid), { logoUrl: logoPublicUrl, updatedAt: serverTimestamp() }, { merge: true });
+                        brandKitLogoRef.current = logoPublicUrl;
+                        console.log("[PWA EXPORT LOGO] Logo enregistré dans le Brand Kit du compte.");
+                      }
+                    }
+                  } catch (kitErr) {
+                    console.warn("[PWA EXPORT LOGO] Enregistrement Brand Kit ignoré:", kitErr);
+                  }
                 } catch (storageErr) {
                   console.warn(
                   "[PWA EXPORT LOGO] Firebase Storage unavailable. Keeping custom logo as DataURL instead.",
@@ -6846,6 +7226,11 @@ const processPreview = async (base64Composite: string) => {
       const jobData = {
         // Core job execution states
         status: 'ready_to_generate',
+        // Génération UNIQUE : retour à Gemini 2.5 Flash par défaut — le 3 Pro
+        // « inventait » des fonds (le moteur ne lui passait que l'IMAGE_C).
+        // Le 3 Pro reste testable via « 2 MODELS » (admin) le temps de valider
+        // le correctif moteur (envoi des 3 images au 3 Pro aussi).
+        model: COMPARE_MODEL_FLASH,
         createdAt: serverTimestamp(),
         imageA: validatedImageA,
         imageB: validatedImageB,
@@ -6904,6 +7289,9 @@ const processPreview = async (base64Composite: string) => {
           imageColorFillWalls: getPropValue(activePreset, 'imageColorFillWalls') === true
             || String(getPropValue(activePreset, 'imageColorFillWalls')).toLowerCase() === 'true',
           imageColorFillTarget: state.colorTheme || '',
+          // Réflexion du véhicule sur le sol (pilotée par la table SheetSync du
+          // fond : 'none' | 'light' | 'mirror'). Injectée dans le prompt par l'app-API.
+          groundReflection: String(getPropValue(activePreset, 'groundReflection') || 'none').toLowerCase(),
           logoPlaceholderCoords: {
             x: logoXVal,
             y: logoYVal,
@@ -6994,6 +7382,32 @@ const processPreview = async (base64Composite: string) => {
         } catch (serverErr) {
           console.error("[PWA FALLBACK WRITE] Even server fallback failed:", serverErr);
           handleFirestoreError(firestoreErr, OperationType.WRITE, `exports/${jobId}`);
+        }
+      }
+
+      // === Second job (mode "2 MODELS") : même composition, modèle 3 Pro. =====
+      if (compareModels && compareJobId) {
+        const compareJobData = { ...jobData, model: COMPARE_MODEL_PRO };
+        try {
+          await setDoc(doc(db, 'exports', compareJobId), compareJobData);
+          console.log(`[PWA 2 MODELS] Second job ${compareJobId} soumis avec le modèle ${COMPARE_MODEL_PRO}.`);
+        } catch (compareErr) {
+          console.warn("[PWA 2 MODELS] Firestore setDoc du 2ᵉ job échoué, fallback serveur local:", compareErr);
+          try {
+            const fb = await fetch(resolveApiUrl('/api/jobs'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jobId: compareJobId, jobData: compareJobData })
+            });
+            if (!fb.ok) throw new Error(`Fallback server returned status ${fb.status}`);
+          } catch (compareServerErr) {
+            console.error("[PWA 2 MODELS] Échec de soumission du 2ᵉ job (Firestore + serveur):", compareServerErr);
+            setState(prev => ({
+              ...prev,
+              compareJobStatus: 'error',
+              compareJobError: 'Impossible de soumettre le job du 2ᵉ modèle (3 Pro).'
+            }));
+          }
         }
       }
 
@@ -7234,7 +7648,9 @@ const processPreview = async (base64Composite: string) => {
   const rawColorAllowed = getPropValue(activeColorPreset, 'imageColorFillEnabled');
   const colorAllowed = rawColorAllowed === true || String(rawColorAllowed).toLowerCase() === 'true';
   // L'aperçu couleur ne s'affiche que sur l'écran couleur (et live preview) : ailleurs, vrai fond.
-  const colorPreviewActive = colorAllowed && (state.screen === 'color_light' || state.screen === 'live_preview');
+  // 'generation' inclus : l'aperçu de l'écran « Interconnexion AI Studio » garde
+  // l'effet néon teinté choisi par l'utilisateur pendant toute la génération.
+  const colorPreviewActive = colorAllowed && (state.screen === 'color_light' || state.screen === 'live_preview' || state.screen === 'generation');
 
   const next = (screen: Screen) => {
     // Le fond n'autorise pas la couleur → on saute l'écran couleur.
@@ -7290,11 +7706,23 @@ const processPreview = async (base64Composite: string) => {
     showText: state.showText,
     onNavigateEnv: (state.screen === 'environment_category' || state.screen === 'environment_variants') ? handleEnvVariantNavigate : undefined,
     onNavigateBase: state.screen === 'platform_base' ? handlePlatformVariantNavigate : undefined,
-    onUpdateTransform: (state.screen === 'environment_category' || state.screen === 'live_preview') ? (newTransform: typeof state.imageTransform) => {
+    // Déplacement/redimensionnement du véhicule : RÉSERVÉ À L'ADMIN (tests).
+    // Le placement automatique fait foi pour les utilisateurs — sans ce prop,
+    // SharedPreview désactive tous ses gestes (drag/pinch) et l'écran Final
+    // Review masque le panneau « Adjust ».
+    onUpdateTransform: (isAdminEmail(authUser?.email) && (state.screen === 'environment_category' || state.screen === 'live_preview')) ? (newTransform: typeof state.imageTransform) => {
       setState(prev => ({ ...prev, imageTransform: newTransform }));
     } : undefined,
     highlightStep: getHighlightStep(state.screen),
     currentJobResult: state.currentJobResult,
+    // Type de véhicule : sert à choisir le deck de phrases humoristiques
+    // (voiture / moto / camion) sur l'écran de génération.
+    vehicleCategory: state.vehicleCategory,
+    // Mode "2 MODELS" — résultat/état du 2ᵉ job (modèle 3 Pro) pour l'écran final.
+    compareJobId: state.compareJobId,
+    compareJobStatus: state.compareJobStatus,
+    compareJobResult: state.compareJobResult,
+    compareJobError: state.compareJobError,
     brandingPresets: brandingPresets
   };
 
@@ -7469,10 +7897,11 @@ const processPreview = async (base64Composite: string) => {
         )}
 
         {state.screen === 'live_preview' && (
-          <LivePreviewScreen 
+          <LivePreviewScreen
             key="preview"
             onBack={() => back('color_light')}
-            onNext={handleStartCompositingJob}
+            onNext={() => handleStartCompositingJob()}
+            onGenerateTwoModels={() => handleStartCompositingJob({ compareModels: true })}
             onHome={() => resetHome()}
             onJump={(screen) => setState(s => {
               const baseState = { ...s, screen, isJumpingBack: true };

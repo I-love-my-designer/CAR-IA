@@ -73,6 +73,12 @@ export interface AppState {
   currentJobResult: string | null;
   currentJobError: string | null;
   roughComposite: string | null;
+  // Mode "2 MODELS" (test admin) : second job généré en parallèle avec un autre
+  // modèle Gemini pour comparer les deux rendus côte à côte.
+  compareJobId: string | null;
+  compareJobStatus: 'pending' | 'processing' | 'completed' | 'error' | null;
+  compareJobResult: string | null;
+  compareJobError: string | null;
 }
 
 export const INITIAL_STATE: AppState = {
@@ -120,4 +126,8 @@ export const INITIAL_STATE: AppState = {
   currentJobResult: null,
   currentJobError: null,
   roughComposite: null,
+  compareJobId: null,
+  compareJobStatus: null,
+  compareJobResult: null,
+  compareJobError: null,
 };

@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Trash2, X } from 'lucide-react';
 import {
-  listCustomFolder, generateBackground, saveCustomBackground, type CustomAsset,
+  listCustomFolder, generateBackground, saveCustomBackground, listSavedCustomBackgrounds,
+  deleteCustomBackground, MAX_SAVED_BACKGROUNDS, type CustomAsset,
 } from '../lib/customStudio';
+import { loadBrandKit } from './BrandKitModal';
 
 interface Props {
   open: boolean;
@@ -41,7 +44,8 @@ const Thumb: React.FC<{ url: string; selected: boolean; onClick: () => void; lab
   >
     <img src={url} alt={label || ''} referrerPolicy="no-referrer" loading="lazy" className="h-full w-full object-cover opacity-90" />
     {label && (
-      <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1 py-0.5 text-[8px] uppercase tracking-widest text-white/80">
+      /* pr-7 : réserve la place de la corbeille en bas à droite (pas de chevauchement). */
+      <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1 py-0.5 pr-7 text-[7.5px] uppercase tracking-[0.12em] text-white/80">
         {label}
       </span>
     )}
@@ -54,6 +58,7 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
   const [examples, setExamples] = useState<CustomAsset[]>([]);
   const [sols, setSols] = useState<CustomAsset[]>([]);
   const [fonds, setFonds] = useState<CustomAsset[]>([]);
+  const [saved, setSaved] = useState<CustomAsset[]>([]);
   const [loading, setLoading] = useState(false);
 
   const [example, setExample] = useState<string | null>(null);
@@ -70,6 +75,25 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
   const pickerRef = useRef<HTMLDivElement>(null);
   const [pickerPos, setPickerPos] = useState<{ x: number; y: number } | null>(null);
 
+  // Popup de prévisualisation d'un fond enregistré (tap sur la vignette) :
+  // grand aperçu + « Utiliser comme base » + corbeille + croix. Tactile-first.
+  const [savedPreview, setSavedPreview] = useState<{ id: string; url: string; label: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Filet de sécurité : si aucun logo n'est fourni par la session (prop), on va
+  // chercher celui du Brand Kit directement dans Firestore (brand_kits/{uid}).
+  const [kitLogo, setKitLogo] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || brandLogoUrl || !userId) return;
+    let cancelled = false;
+    (async () => {
+      const kit = await loadBrandKit(userId);
+      if (!cancelled && kit?.logoUrl) setKitLogo(kit.logoUrl);
+    })();
+    return () => { cancelled = true; };
+  }, [open, brandLogoUrl, userId]);
+  const effectiveLogo = brandLogoUrl || kitLogo;
+
   useEffect(() => {
     if (!open) return;
     // reset léger à l'ouverture
@@ -77,10 +101,11 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const [ex, so, fo] = await Promise.all([
+      const [ex, so, fo, sv] = await Promise.all([
         listCustomFolder('EXAMPLES'), listCustomFolder('SOLS'), listCustomFolder('FONDS'),
+        userId ? listSavedCustomBackgrounds(userId) : Promise.resolve([]),
       ]);
-      if (!cancelled) { setExamples(ex); setSols(so); setFonds(fo); setLoading(false); }
+      if (!cancelled) { setExamples(ex); setSols(so); setFonds(fo); setSaved(sv); setLoading(false); }
     })();
     return () => { cancelled = true; };
   }, [open]);
@@ -105,8 +130,8 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
     setError(null); setBusy(true); setResult(null); setSavedUrl(null);
     try {
       const params = mode === 'color'
-        ? { baseImage: example, color, logo: brandLogoUrl, logoMaterialPrompt: material || null }
-        : { groundImage: sol, topImage: fond, baseImage: example, logo: brandLogoUrl, logoMaterialPrompt: material || null };
+        ? { baseImage: example, color, logo: effectiveLogo, logoMaterialPrompt: material || null }
+        : { groundImage: sol, topImage: fond, baseImage: example, logo: effectiveLogo, logoMaterialPrompt: material || null };
       const img = await generateBackground(apiUrl, params);
       setResult(img);
       setStep('result');
@@ -127,15 +152,34 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
 
   const save = async () => {
     if (!result || !userId) return;
+    if (saved.length >= MAX_SAVED_BACKGROUNDS) {
+      setError(`Limite de ${MAX_SAVED_BACKGROUNDS} fonds atteinte — supprimez-en un (étape « Choisir un fond ») pour enregistrer celui-ci.`);
+      return;
+    }
     setBusy(true); setError(null);
     try {
-      const { url } = await saveCustomBackground(userId, result);
+      const { id, url } = await saveCustomBackground(userId, result);
       setSavedUrl(url);
+      // Le fond apparaît immédiatement en fin de liste « Mes fonds enregistrés »
+      // (ordre chronologique : le plus récent porte le numéro le plus élevé).
+      setSaved((prev) => [...prev, { name: id, url }]);
       onSaved?.(url);
     } catch (e: any) {
       setError(e?.message || 'Enregistrement échoué.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Suppression d'un fond enregistré (fiche Firestore + fichier Storage).
+  const removeSaved = async (asset: CustomAsset) => {
+    if (!userId) return;
+    try {
+      await deleteCustomBackground(userId, asset.name);
+      setSaved((prev) => prev.filter((a) => a.name !== asset.name));
+      if (example === asset.url) setExample(null);
+    } catch (e: any) {
+      setError(e?.message || 'Suppression échouée.');
     }
   };
 
@@ -145,26 +189,36 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
 
   return (
     <div className="fixed inset-0 z-[9997] flex flex-col bg-zinc-950 text-white">
-      {/* Barre supérieure */}
-      <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+      {/* Barre supérieure — padding safe-area : en PWA plein écran iPhone, sans
+          lui la croix passait sous l'encoche et devenait intouchable. */}
+      <div
+        className="flex items-center justify-between border-b border-white/10 px-5 pb-3"
+        style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)' }}
+      >
         <div className="flex items-center gap-3">
           <h2 className="text-base font-black uppercase tracking-[0.2em]">Custom</h2>
           <span className="text-[10px] uppercase tracking-widest text-white/40">
             {step === 'pick' ? 'Choisir un fond' : step === 'customize' ? 'Personnaliser' : 'Résultat'}
           </span>
         </div>
-        <button onClick={onClose} className="text-2xl leading-none text-white/40 hover:text-white">×</button>
+        <button
+          onClick={onClose}
+          aria-label="Fermer"
+          className="flex h-10 w-10 shrink-0 items-center justify-center border border-white/15 bg-white/5 text-xl leading-none text-white/70 transition-colors hover:bg-white/15 hover:text-white"
+        >
+          ×
+        </button>
       </div>
 
       {/* Logo Brand Kit par défaut */}
       <div className="flex items-center gap-3 border-b border-white/5 bg-black/30 px-5 py-2.5">
         <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded bg-[#808080]">
-          {brandLogoUrl
-            ? <img src={brandLogoUrl} alt="logo" referrerPolicy="no-referrer" className="max-h-[85%] max-w-[85%] object-contain" />
+          {effectiveLogo
+            ? <img src={effectiveLogo} alt="logo" referrerPolicy="no-referrer" className="max-h-[85%] max-w-[85%] object-contain" />
             : <span className="text-[7px] uppercase tracking-widest text-white/40">Logo</span>}
         </div>
         <span className="text-[10px] uppercase tracking-widest text-white/50">
-          {brandLogoUrl ? 'Logo du Brand Kit — intégré au fond généré' : 'Aucun logo — ajoutez-en un dans le Brand Kit'}
+          {effectiveLogo ? 'Logo du Brand Kit — intégré au fond généré' : 'Aucun logo — ajoutez-en un dans le Brand Kit'}
         </span>
       </div>
 
@@ -174,12 +228,44 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
         {/* ÉTAPE 1 : choix d'un fond d'exemple */}
         {!loading && step === 'pick' && (
           <>
+            {/* Fonds custom déjà générés/enregistrés par l'utilisateur : nommés
+                « Fond 1 » → « Fond 10 » (ordre de création, max 10), supprimables
+                via la corbeille, et réutilisables comme base d'une nouvelle passe. */}
+            {saved.length > 0 && (
+              <div className="mb-5">
+                <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-emerald-300/80">
+                  Mes fonds enregistrés ({saved.length}/{MAX_SAVED_BACKGROUNDS})
+                </p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {saved.map((a, i) => (
+                    <div key={a.url} className="relative">
+                      <Thumb
+                        url={a.url}
+                        selected={example === a.url}
+                        onClick={() => { setSavedPreview({ id: a.name, url: a.url, label: `Fond ${i + 1}` }); setConfirmDelete(false); }}
+                        label={`Fond ${i + 1}`}
+                      />
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setSavedPreview({ id: a.name, url: a.url, label: `Fond ${i + 1}` }); setConfirmDelete(true); }}
+                        aria-label={`Supprimer Fond ${i + 1}`}
+                        className="absolute bottom-1 right-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white/60 active:bg-red-500/80 active:text-white"
+                      >
+                        <Trash2 size={11} strokeWidth={1.5} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 mb-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60">
+                  Fonds d'exemple
+                </p>
+              </div>
+            )}
             {examples.length === 0 ? (
               <div className="py-14 text-center">
                 <div className="mb-3 text-3xl">🖼️</div>
                 <p className="text-sm text-white/60">Aucun fond d'exemple.</p>
                 <p className="mx-auto mt-1 max-w-xs text-xs text-white/40">
-                  Déposez des images dans <span className="font-mono text-white/60">CUSTOM/EXAMPLES/</span> (Firebase Storage).
+                  Déposez des images dans <span className="font-mono text-white/60">ENVIRONMENTS/CUSTOM/EXAMPLES/</span> (Firebase Storage).
                 </p>
               </div>
             ) : (
@@ -195,7 +281,23 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
         {/* ÉTAPE 2 : personnalisation */}
         {!loading && step === 'customize' && (
           <div className="space-y-5">
-            {example && (
+            {/* Aperçu du haut : en mode SOL + FOND, les vignettes cliquées
+                apparaissent immédiatement (fond = moitié haute, sol = moitié
+                basse — en attendant les masques/couches alpha cumulables). */}
+            {mode === 'solfond' && (sol || fond) ? (
+              <div className="flex aspect-video w-full flex-col overflow-hidden rounded">
+                <div className="h-1/2 w-full bg-zinc-800/60">
+                  {fond
+                    ? <img src={fond} alt="Fond sélectionné" referrerPolicy="no-referrer" className="h-full w-full object-cover" />
+                    : <div className="flex h-full items-center justify-center text-[9px] uppercase tracking-widest text-white/25">Fond ?</div>}
+                </div>
+                <div className="h-1/2 w-full bg-zinc-800/60">
+                  {sol
+                    ? <img src={sol} alt="Sol sélectionné" referrerPolicy="no-referrer" className="h-full w-full object-cover" />
+                    : <div className="flex h-full items-center justify-center text-[9px] uppercase tracking-widest text-white/25">Sol ?</div>}
+                </div>
+              </div>
+            ) : example && (
               <img src={example} alt="" referrerPolicy="no-referrer" className="aspect-video w-full rounded object-cover" />
             )}
 
@@ -239,7 +341,7 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
                 <div>
                   <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60">Sol</p>
                   {sols.length === 0 ? (
-                    <p className="text-xs text-white/40">Déposez des sols dans <span className="font-mono">CUSTOM/SOLS/</span>.</p>
+                    <p className="text-xs text-white/40">Déposez des sols dans <span className="font-mono">ENVIRONMENTS/CUSTOM/SOLS/</span>.</p>
                   ) : (
                     <div className="grid grid-cols-4 gap-1.5">
                       {sols.map((a) => <Thumb key={a.url} url={a.url} selected={sol === a.url} onClick={() => setSol(a.url)} />)}
@@ -249,7 +351,7 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
                 <div>
                   <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60">Fond (partie haute)</p>
                   {fonds.length === 0 ? (
-                    <p className="text-xs text-white/40">Déposez des fonds dans <span className="font-mono">CUSTOM/FONDS/</span>.</p>
+                    <p className="text-xs text-white/40">Déposez des fonds dans <span className="font-mono">ENVIRONMENTS/CUSTOM/FONDS/</span>.</p>
                   ) : (
                     <div className="grid grid-cols-4 gap-1.5">
                       {fonds.map((a) => <Thumb key={a.url} url={a.url} selected={fond === a.url} onClick={() => setFond(a.url)} />)}
@@ -260,7 +362,7 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
             )}
 
             {/* Matériau du logo (optionnel) */}
-            {brandLogoUrl && (
+            {effectiveLogo && (
               <div>
                 <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-white/60">Matériau du logo (optionnel)</p>
                 <input
@@ -280,7 +382,7 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
         {!loading && step === 'result' && result && (
           <div className="space-y-4">
             <img src={result} alt="Fond généré" className="w-full rounded" />
-            {savedUrl && <p className="text-center text-xs text-emerald-300">✓ Fond enregistré — disponible comme environnement.</p>}
+            {savedUrl && <p className="text-center text-xs text-emerald-300">✓ Fond enregistré — retrouvez-le dans « Mes fonds enregistrés » (étape 1, Choisir un fond).</p>}
             {error && <p className="text-center text-xs text-red-400">{error}</p>}
           </div>
         )}
@@ -323,6 +425,76 @@ const CustomStudioModal: React.FC<Props> = ({ open, onClose, brandLogoUrl, userI
           </>
         )}
       </div>
+
+      {/* Popup de prévisualisation d'un fond enregistré : grand aperçu, croix,
+          « Utiliser comme base » et corbeille (avec confirmation). */}
+      {savedPreview && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm"
+          onClick={() => { setSavedPreview(null); setConfirmDelete(false); }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden border border-white/15 bg-zinc-900 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
+              <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-white/80">{savedPreview.label}</span>
+              <button
+                onClick={() => { setSavedPreview(null); setConfirmDelete(false); }}
+                aria-label="Fermer"
+                className="flex h-8 w-8 items-center justify-center bg-white/5 text-white/60 active:bg-white/20 active:text-white"
+              >
+                <X size={16} strokeWidth={1.5} />
+              </button>
+            </div>
+
+            <img src={savedPreview.url} alt={savedPreview.label} referrerPolicy="no-referrer" className="aspect-square w-full object-cover" />
+
+            <div className="flex items-center justify-between gap-2 border-t border-white/10 px-4 py-3">
+              {confirmDelete ? (
+                <>
+                  <span className="text-[11px] text-white/70">Supprimer ce fond&nbsp;?</span>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={async () => {
+                        const target = saved.find((s) => s.name === savedPreview.id);
+                        if (target) await removeSaved(target);
+                        setConfirmDelete(false);
+                        setSavedPreview(null);
+                      }}
+                      className="bg-red-500 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-white active:bg-red-400"
+                    >
+                      Supprimer
+                    </button>
+                    <button
+                      onClick={() => setConfirmDelete(false)}
+                      className="bg-white/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-white/70 active:bg-white/20"
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { setExample(savedPreview.url); setSavedPreview(null); }}
+                    className="flex-1 bg-white py-2 text-[10px] font-black uppercase tracking-[0.2em] text-black active:bg-white/80"
+                  >
+                    Utiliser comme base
+                  </button>
+                  <button
+                    onClick={() => setConfirmDelete(true)}
+                    title="Supprimer"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center border border-white/15 bg-white/5 text-white/70 active:bg-red-500/80 active:text-white"
+                  >
+                    <Trash2 size={15} strokeWidth={1.5} />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

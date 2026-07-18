@@ -115,6 +115,15 @@ const AuthModal: React.FC<AuthModalProps> = ({ open, onClose, onSuccess, reason 
             {mode === 'signup' ? 'Se connecter' : 'Créer un compte'}
           </button>
         </p>
+
+        {/* Sortie toujours possible — y compris pendant la fenêtre de sélection
+            de compte Google (état loading) : on ne bloque jamais l'utilisateur. */}
+        <button
+          onClick={() => { setLoading(false); setError(null); onClose(); }}
+          className="mt-4 w-full rounded-lg border border-white/10 py-2 text-xs font-medium text-white/50 transition-colors hover:bg-white/5 hover:text-white"
+        >
+          Annuler
+        </button>
       </div>
     </div>
   );

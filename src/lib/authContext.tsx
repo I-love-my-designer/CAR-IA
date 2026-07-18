@@ -93,8 +93,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <Ctx.Provider value={{ user, isGuest: guest, isEntitled, plan, requireAccount, openAuth, brandKitOpen, openBrandKit: () => setBrandKitOpen(true), closeBrandKit: () => setBrandKitOpen(false), customOpen, openCustom: () => setCustomOpen(true), closeCustom: () => setCustomOpen(false), logout }}>
       {children}
 
-      {/* Floating account chip — available on every screen, non-invasive */}
-      {ready && (
+      {/* Floating account chip — available on every screen, non-invasive.
+          Masqué quand un studio plein écran (CUSTOM / Brand Kit) est ouvert :
+          le chip recouvrait leur croix de fermeture en haut à droite. */}
+      {ready && !customOpen && !brandKitOpen && (
         <div className="fixed right-3 top-3 z-[9990]">
           {guest ? (
             <button
@@ -104,17 +106,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               Se connecter
             </button>
           ) : (
+            /* Avatar SEUL (pas de nom) : le cartouche complet recouvrait le titre
+               de l'app. Pattern standard (Google, Airbnb…) : un cercle discret
+               avec l'initiale, le nom complet vit dans « Mon espace ». */
             <button
               onClick={() => setSpaceOpen(true)}
-              className="flex items-center gap-2 rounded-full border border-white/15 bg-black/50 py-1 pl-1 pr-3 text-xs text-white backdrop-blur hover:bg-black/70"
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-emerald-600 text-[12px] font-bold text-white shadow-md backdrop-blur hover:brightness-110"
               title="Mon espace"
+              aria-label="Mon espace"
             >
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold">
-                {(user?.displayName || user?.email || 'U').trim()[0]?.toUpperCase()}
-              </span>
-              <span className="max-w-[110px] truncate text-white/70">
-                {user?.displayName || user?.email || 'Mon espace'}
-              </span>
+              {(user?.displayName || user?.email || 'U').trim()[0]?.toUpperCase()}
             </button>
           )}
         </div>

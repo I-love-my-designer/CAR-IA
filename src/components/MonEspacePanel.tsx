@@ -1,4 +1,5 @@
 import React from 'react';
+import { Images, Wallpaper, Wand2, Palette, CreditCard, LogOut } from 'lucide-react';
 import type { AuthUser } from '../lib/auth';
 
 interface Props {
@@ -15,8 +16,9 @@ interface Props {
   onLogout: () => void;
 }
 
+// Pictos : lucide (monochromes, trait fin) — même esprit minimal que le reste de l'UI.
 const Row: React.FC<{
-  icon: string;
+  icon: React.ReactNode;
   label: string;
   onClick?: () => void;
   right?: React.ReactNode;
@@ -29,7 +31,7 @@ const Row: React.FC<{
       disabled ? 'cursor-default opacity-40' : 'hover:bg-white/5'
     }`}
   >
-    <span className="w-6 text-center text-lg">{icon}</span>
+    <span className="flex w-6 items-center justify-center text-white/60">{icon}</span>
     <span className="flex-1 text-sm font-medium text-white">{label}</span>
     {right ?? (!disabled && <span className="text-white/30">›</span>)}
   </button>
@@ -77,17 +79,18 @@ const MonEspacePanel: React.FC<Props> = ({
 
         {/* Entrées */}
         <nav className="flex-1 overflow-y-auto py-2">
-          <Row icon="🖼️" label="Mes annonces" onClick={onOpenAnnonces} />
-          <Row icon="⭐" label="Mes favoris" onClick={onOpenFavoris} />
+          <Row icon={<Images size={18} strokeWidth={1.5} />} label="Mes annonces" onClick={onOpenAnnonces} />
+          {/* « Mes fonds » : favoris du catalogue + fonds générés via CUSTOM */}
+          <Row icon={<Wallpaper size={18} strokeWidth={1.5} />} label="Mes fonds" onClick={onOpenFavoris} />
           <Row
-            icon="🪄"
+            icon={<Wand2 size={18} strokeWidth={1.5} />}
             label="Custom"
             onClick={onOpenCustom}
             right={<span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">Fond IA</span>}
           />
-          <Row icon="🎨" label="Brand Kit" onClick={onOpenBrandKit} />
+          <Row icon={<Palette size={18} strokeWidth={1.5} />} label="Brand Kit" onClick={onOpenBrandKit} />
           <Row
-            icon="💳"
+            icon={<CreditCard size={18} strokeWidth={1.5} />}
             label="Mon abonnement"
             onClick={onOpenAbonnement}
             right={!isEntitled ? <span className="rounded-full bg-emerald-600 px-2.5 py-0.5 text-[10px] font-bold text-white">Passer Pro</span> : <span className="text-white/30">›</span>}
@@ -96,7 +99,7 @@ const MonEspacePanel: React.FC<Props> = ({
 
         {/* Pied : déconnexion */}
         <div className="border-t border-white/10 py-2">
-          <Row icon="🚪" label="Se déconnecter" onClick={onLogout} right={<span />} />
+          <Row icon={<LogOut size={18} strokeWidth={1.5} />} label="Se déconnecter" onClick={onLogout} right={<span />} />
         </div>
       </aside>
     </div>

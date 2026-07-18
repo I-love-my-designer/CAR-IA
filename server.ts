@@ -126,6 +126,33 @@ async function startServer() {
     }
   });
 
+  // ==========================================================================
+  // Relais Studio CUSTOM → moteur (app-API). L'endpoint de génération de fond
+  // n'existe que sur le service app-API (Cloud Run) : sans ce relais, la PWA
+  // (locale ou déployée) appelait /api/gemini/generate-background sur son propre
+  // origin → 404 et le studio CUSTOM ne générait jamais rien.
+  // ==========================================================================
+  const ENGINE_API_URL = (process.env.ENGINE_API_URL || "https://car-ia-app-api-172885729212.europe-west1.run.app").replace(/\/$/, "");
+
+  app.post("/api/gemini/generate-background", rateLimit(6), async (req, res) => {
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      // Secret partagé éventuel du moteur (requireApiSecret côté app-API).
+      if (process.env.API_SHARED_SECRET) headers["x-api-key"] = process.env.API_SHARED_SECRET;
+      console.log(`[CUSTOM RELAY] → ${ENGINE_API_URL}/api/gemini/generate-background`);
+      const upstream = await fetch(`${ENGINE_API_URL}/api/gemini/generate-background`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(req.body || {}),
+      });
+      const json = await upstream.json().catch(() => ({ success: false, error: `Réponse moteur invalide (HTTP ${upstream.status}).` }));
+      return res.status(upstream.status).json(json);
+    } catch (error: any) {
+      console.error("[CUSTOM RELAY] Échec du relais vers le moteur:", error);
+      return res.status(502).json({ success: false, error: error?.message || "Moteur injoignable." });
+    }
+  });
+
   app.post("/api/upload-export-file", rateLimit(30), (req, res) => {
     try {
       const { jobId, type, dataUrl } = req.body;
